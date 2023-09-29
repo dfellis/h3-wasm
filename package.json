@@ -1,0 +1,32 @@
+{
+  "name": "h3-wasm",
+  "version": "0.0.1-alpha",
+  "description": "WASM-compiled H3 for Node and Browser using Zig",
+  "main": "index.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "nodeunit test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/dfellis/h3-wasm.git"
+  },
+  "keywords": [
+    "h3",
+    "wasm",
+    "node",
+    "browser"
+  ],
+  "author": "David Ellis <isv.damocles@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/dfellis/h3-wasm/issues"
+  },
+  "homepage": "https://github.com/dfellis/h3-wasm#readme",
+  "devDependencies": {
+    "h3-js": "^4.1.0",
+    "nodeunit": "^0.11.3"
+  }
+}
