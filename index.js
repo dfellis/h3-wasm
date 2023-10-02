@@ -7,29 +7,29 @@ const inst = new WebAssembly.Instance(mod, {
   env: {
     // Not that this matters in JS-land, but this logic is not threadsafe ;)
     makeArr: () => { 
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       scratch.set(id, []);
       return id;
     },
     makeObj: () => {
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       scratch.set(id, {});
       return id;
     },
     makeErr: (code) => {
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       const err = new Error();
       err.code = code;
       scratch.set(id, err);
       return id;
     },
     makeInt32: (val) => {
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       scratch.set(id, val);
       return id;
     },
     makeStr: (val) => {
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       const arr = new Uint8Array(inst.exports.memory.buffer);
       const chars = [];
       for (let i = val; i < arr.length; i++) {
@@ -41,7 +41,7 @@ const inst = new WebAssembly.Instance(mod, {
       return id;
     },
     makeBool: (val) => {
-      const id = crypto.randomInt(0, 2 ** 32);
+      const id = crypto.randomInt(0, 2 ** 31);
       scratch.set(id, !!val);
       return id;
     },
@@ -50,6 +50,13 @@ const inst = new WebAssembly.Instance(mod, {
       const addr = inst.exports.malloc(4);
       const arr = new Uint32Array(inst.exports.memory.buffer);
       arr.set(val, addr / 4);
+      return addr;
+    },
+    getDouble: (id) => {
+      const val = scratch.get(id);
+      const addr = inst.exports.malloc(8);
+      const arr = new Float64Array(inst.exports.memory.buffer);
+      arr.set(val, addr / 8);
       return addr;
     },
     getStr: (id) => {
@@ -110,21 +117,35 @@ const inst = new WebAssembly.Instance(mod, {
       const val = scratch.get(valId);
       obj[key] = val;
     },
+    consoleLog: (val) => {
+      const arr = new Uint8Array(inst.exports.memory.buffer);
+      const chars = [];
+      for (let i = val; i < arr.length; i++) {
+        if (arr[i] === 0) break;
+        chars.push(String.fromCharCode(arr[i]));
+      }
+      str = chars.join('');
+      console.log(str);
+    },
   }
 });
 
 module.exports = {
-  ...Object.fromEntries(Object.entries(inst.exports).filter(([_, fn]) => fn instanceof Function).map(([name, fn]) => {
-    // Assuming *all* binding functions return a scratch ID
-    return [name, (...args) => {
-      Object.values(args).forEach((v, i) => scratch.set(i, v));
-      const id = fn();
-      const val = scratch.get(id);
-      scratch.clear();
-      return val;
-    }];
-  })),
-  UNITS: {
+  ...Object.fromEntries(
+    Object.entries(inst.exports)
+      .filter(([name, fn]) => fn instanceof Function && name.startsWith('bind__'))
+      .map(([name, fn]) => {
+        // Assuming *all* binding functions return a scratch ID
+        return [name.substring(6), (...args) => {
+          Object.values(args).forEach((v, i) => scratch.set(i, v));
+          const id = fn();
+          const val = scratch.get(id);
+          scratch.clear();
+          return val;
+        }];
+      })
+  ),
+      UNITS: {
     m: 'm',
     km: 'km',
     rads: 'rads',
