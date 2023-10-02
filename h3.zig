@@ -1,6 +1,5 @@
 const std = @import("std");
 const h3 = @cImport({
-    @cInclude("stdlib.h");
     @cInclude("h3api.h");
 });
 
