@@ -114,7 +114,7 @@ const benchmarkGen = (methodName, genArgs, useTryCatch = false, extraName = '') 
   console.log('')
   console.log(`${methodName}${extraName} Benchmark:`)
   console.log('H3-js time in ns:   ', h3jsTime[0] * 1e9 + h3jsTime[1])
-  console.log('H3-node time in ns: ', h3wasmTime[0] * 1e9 + h3wasmTime[1])
+  console.log('H3-wasm time in ns: ', h3wasmTime[0] * 1e9 + h3wasmTime[1])
   test.done()
 }
 
