@@ -9,8 +9,16 @@ export fn lroundl(x: c_longdouble) c_long {
     return @intFromFloat(@round(x));
 }
 
+export fn asin(x: f64) f64 {
+    return std.math.asin(x);
+}
+
 export fn acos(x: f64) f64 {
     return std.math.acos(x);
+}
+
+export fn atan(x: f64) f64 {
+    return std.math.atan(x);
 }
 
 export fn atan2(y: f64, x: f64) f64 {
@@ -21,6 +29,12 @@ export fn atan2(y: f64, x: f64) f64 {
 // instead just re-implementing h3ToString with a non-exported variant as it's a lot easier
 fn h3ToString(cell: h3.H3Index, mem: *[17]u8) void {
     _ = std.fmt.bufPrint(mem, "{x}", .{cell}) catch 0;
+}
+
+// Similarly, only stringToH3 uses sscanf so just reimplementing it. Not sure why these functions
+// aren't being properly defined, though. :/
+fn stringToH3(cellStr: [*]u8) !h3.H3Index {
+    return std.fmt.parseInt(u64, cellStr[0..15], 16);
 }
 
 // Binding API. Basic JSON object manipulation using handle-like ID mechanism. All binding functions
@@ -45,11 +59,13 @@ extern fn getDouble(u32) *f64;
 extern fn getStr(u32) [*c]u8;
 // Array manipulation. Takes the handle ID and the value to append to the array.
 extern fn appendInt32(u32, i32) void;
+extern fn appendDouble(u32, f64) void;
 extern fn appendStr(u32, [*]u8) void;
 extern fn appendBool(u32, u8) void;
 extern fn appendObj(u32, u32) void;
 // Object manipulation. Takes the handle ID, the key string, and the value to add to the object.
 extern fn addInt32(u32, [*]u8, i32) void;
+extern fn addDouble(u32, [*]u8, f64) void;
 extern fn addStr(u32, [*]u8, [*]u8) void;
 extern fn addBool(u32, [*]u8, u8) void;
 extern fn addObj(u32, [*]u8, u32) void;
@@ -121,4 +137,21 @@ export fn bind__latLngToCell() u32 {
     var cellStr = std.mem.zeroes([17]u8);
     h3ToString(cell, &cellStr);
     return makeStr(&cellStr);
+}
+
+export fn bind__cellToLatLng() u32 {
+    const cellStr = getStr(0);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+    var latLng = h3.LatLng{ .lat = 0, .lng = 0 };
+    const err = h3.cellToLatLng(cell, &latLng);
+    if (err > 0) {
+        return makeErr(err);
+    }
+    const out = makeArr();
+    appendDouble(out, h3.radsToDegs(latLng.lat));
+    appendDouble(out, h3.radsToDegs(latLng.lng));
+    return out;
 }

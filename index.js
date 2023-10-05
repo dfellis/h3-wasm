@@ -71,7 +71,13 @@ const inst = new WebAssembly.Instance(mod, {
       const arr = scratch.get(id);
       // I could add an `instanceof` check here, but it would slow things down and it should be
       // trivial to verify correctness in the test suite, so I'm not including these for now.
-      arr.append(val);
+      arr.push(val);
+    },
+    appendDouble: (id, val) => {
+      const arr = scratch.get(id);
+      // I could add an `instanceof` check here, but it would slow things down and it should be
+      // trivial to verify correctness in the test suite, so I'm not including these for now.
+      arr.push(val);
     },
     appendStr: (id, val) => {
       const array = scratch.get(id);
@@ -82,18 +88,22 @@ const inst = new WebAssembly.Instance(mod, {
         chars.push(String.fromCharCode(arr[i]));
       }
       str = chars.join('');
-      array.append(str);
+      array.push(str);
     },
     appendBool: (id, val) => {
       const arr = scratch.get(id);
-      arr.append(!!val);
+      arr.push(!!val);
     },
     appendObj: (arrId, valId) => {
       const arr = scratch.get(arrId);
       const val = scratch.get(valId);
-      arr.append(val);
+      arr.push(val);
     },
     addInt32: (id, key, val) => {
+      const obj = scratch.get(id);
+      obj[key] = val;
+    },
+    addDouble: (id, key, val) => {
       const obj = scratch.get(id);
       obj[key] = val;
     },
