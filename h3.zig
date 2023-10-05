@@ -52,7 +52,7 @@ extern fn makeObj() u32;
 extern fn makeErr(u32) u32;
 extern fn makeInt32(i32) u32;
 extern fn makeStr([*]u8) u32;
-extern fn makeBool(u8) u32;
+extern fn makeBool(c_int) u32;
 // Root object reads. Returns pointer to desired data. Only ints and strings for now.
 extern fn getInt32(u32) *i32;
 extern fn getDouble(u32) *f64;
@@ -61,13 +61,13 @@ extern fn getStr(u32) [*c]u8;
 extern fn appendInt32(u32, i32) void;
 extern fn appendDouble(u32, f64) void;
 extern fn appendStr(u32, [*]u8) void;
-extern fn appendBool(u32, u8) void;
+extern fn appendBool(u32, c_int) void;
 extern fn appendObj(u32, u32) void;
 // Object manipulation. Takes the handle ID, the key string, and the value to add to the object.
 extern fn addInt32(u32, [*]u8, i32) void;
 extern fn addDouble(u32, [*]u8, f64) void;
 extern fn addStr(u32, [*]u8, [*]u8) void;
-extern fn addBool(u32, [*]u8, u8) void;
+extern fn addBool(u32, [*]u8, c_int) void;
 extern fn addObj(u32, [*]u8, u32) void;
 // Debugging tool
 extern fn consoleLog([*]const u8) void;
@@ -182,6 +182,82 @@ export fn bind__cellToBoundary() u32 {
         appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lat));
         appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lng));
         appendObj(out, latLng);
+        i += 1;
+    }
+    return out;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Inspection Functions                                                      //
+///////////////////////////////////////////////////////////////////////////////
+
+export fn bind__getResolution() u32 {
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    return makeInt32(h3.getResolution(cell));
+}
+
+export fn bind__isValidCell() u32 {
+    // TODO: Add the array and typed array support
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    return makeBool(h3.isValidCell(cell));
+}
+
+export fn bind__isResClassIII() u32 {
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    return makeBool(h3.isResClassIII(cell));
+}
+
+export fn bind__isPentagon() u32 {
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    return makeBool(h3.isPentagon(cell));
+}
+
+export fn bind__getIcosahedronFaces() u32 {
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    // I know I'm supposed to use `maxFaceCount`, but it's always going to be <= 5, so I'm just
+    // statically allocating at that maximum
+    var faces = [5]i32{ -1, -1, -1, -1, -1 };
+
+    const err = h3.getIcosahedronFaces(cell, &faces);
+    if (err > 0) {
+        return makeErr(err);
+    }
+    const out = makeArr();
+    var i: u8 = 0;
+    while (i < 5) {
+        if (faces[i] >= 0) {
+            appendInt32(out, faces[i]);
+        }
         i += 1;
     }
     return out;
