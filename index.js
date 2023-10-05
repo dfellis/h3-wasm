@@ -47,14 +47,14 @@ const inst = new WebAssembly.Instance(mod, {
     },
     getInt32: (id) => {
       const val = scratch.get(id);
-      const addr = inst.exports.malloc(4);
+      const addr = inst.exports.alloc(4);
       const arr = new Uint32Array(inst.exports.memory.buffer);
       arr.set([val], addr / 4);
       return addr;
     },
     getDouble: (id) => {
       const val = scratch.get(id);
-      const addr = inst.exports.malloc(8);
+      const addr = inst.exports.alloc(8);
       const arr = new Float64Array(inst.exports.memory.buffer);
       arr.set([val], addr / 8);
       return addr;
@@ -62,7 +62,7 @@ const inst = new WebAssembly.Instance(mod, {
     getStr: (id) => {
       const val = scratch.get(id);
       const len = val.length + 1;
-      const addr = inst.exports.malloc(len);
+      const addr = inst.exports.alloc(len);
       const arr = new Uint8Array(inst.exports.memory.buffer);
       arr.set(val.split('').map(c => c.charCodeAt(0)), addr);
       return addr;

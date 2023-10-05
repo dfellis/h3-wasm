@@ -3,17 +3,18 @@ const h3 = @cImport({
     @cInclude("h3api.h");
 });
 
-// TODO: Why aren't these implemented by the musl bindings?
+// TODO: Why aren't these implemented by the musl bindings? At least confirmed these exactly match
+// the "real" math.h implementations.
 export fn lroundl(x: c_longdouble) c_long {
-    return std.math.lossyCast(c_long, @round(x));
+    return @intFromFloat(@round(x));
 }
 
 export fn acos(x: f64) f64 {
     return std.math.acos(x);
 }
 
-export fn atan2(x: f64, y: f64) f64 {
-    return std.math.atan2(f64, x, y);
+export fn atan2(y: f64, x: f64) f64 {
+    return std.math.atan2(f64, y, x);
 }
 
 // Only h3ToString uses sprintf, which for some reason is not included in the WASM musl libc, so
@@ -56,7 +57,7 @@ extern fn addObj(u32, [*]u8, u32) void;
 extern fn consoleLog([*]const u8) void;
 
 // Memory management functions to provide to JS side
-export fn malloc(size: usize) [*]u8 {
+export fn alloc(size: usize) [*]u8 {
     const allocator = std.heap.page_allocator;
     const dummy: [1]u8 = .{0};
 
@@ -112,7 +113,7 @@ export fn bind__latLngToCell() u32 {
     const res = getInt32(2);
     defer freei32(res);
     var cell: u64 = 0;
-    const latLng = h3.LatLng{ .lat = lat.*, .lng = lng.* };
+    const latLng = h3.LatLng{ .lat = h3.degsToRads(lat.*), .lng = h3.degsToRads(lng.*) };
     const err = h3.latLngToCell(&latLng, res.*, &cell);
     if (err > 0) {
         return makeErr(err);
