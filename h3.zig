@@ -121,6 +121,10 @@ export fn bind__greet() u32 {
     return makeStr(out.ptr);
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Indexing Functions                                                        //
+///////////////////////////////////////////////////////////////////////////////
+
 export fn bind__latLngToCell() u32 {
     const lat = getDouble(0);
     defer freef64(lat);
@@ -141,6 +145,7 @@ export fn bind__latLngToCell() u32 {
 
 export fn bind__cellToLatLng() u32 {
     const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
     const cell = stringToH3(cellStr) catch 0;
     if (cell == 0) {
         return makeErr(1);
@@ -153,5 +158,31 @@ export fn bind__cellToLatLng() u32 {
     const out = makeArr();
     appendDouble(out, h3.radsToDegs(latLng.lat));
     appendDouble(out, h3.radsToDegs(latLng.lng));
+    return out;
+}
+
+export fn bind__cellToBoundary() u32 {
+    const cellStr = getStr(0);
+    defer freestr(cellStr, 16);
+    const cell = stringToH3(cellStr) catch 0;
+    if (cell == 0) {
+        return makeErr(1);
+    }
+
+    var cellBoundary = std.mem.zeroes(h3.CellBoundary);
+    const err = h3.cellToBoundary(cell, &cellBoundary);
+    if (err > 0) {
+        return makeErr(err);
+    }
+    const out = makeArr();
+    // Zig, you're just making this more awkward...
+    var i: usize = 0;
+    while (i < cellBoundary.numVerts) {
+        const latLng = makeArr();
+        appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lat));
+        appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lng));
+        appendObj(out, latLng);
+        i += 1;
+    }
     return out;
 }
