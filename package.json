@@ -3,14 +3,26 @@
   "version": "0.0.1-alpha",
   "description": "WASM-compiled H3 v4.5.0 for Node and Browser, built from the C library with Zig",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
   "type": "module",
   "packageManager": "pnpm@12.18.0",
+  "files": [
+    "index.js",
+    "h3.wasm",
+    "build/metadata.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "directories": {
     "test": "test"
   },
   "scripts": {
     "build": "make",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "prepublishOnly": "node tools/check-artifacts.mjs"
   },
   "repository": {
     "type": "git",
@@ -30,6 +42,9 @@
     "url": "https://github.com/dfellis/h3-wasm/issues"
   },
   "homepage": "https://github.com/dfellis/h3-wasm#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
     "h3-js": "^4.5.0",
     "h3-node": "^4.5.3"

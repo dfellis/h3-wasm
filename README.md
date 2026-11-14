@@ -81,6 +81,30 @@ against **both** `h3-js` and `h3-node` on every function:
 - `test-musl` runs the same suite in a `node:24-alpine` container to
   cover the musl prebuild, mirroring h3-node's musl job.
 
+## Releasing
+
+Releases are cut from tags by `.github/workflows/release.yml` (triggered on a
+`v*` tag, or manually from the Actions tab). The job builds `h3.wasm` once
+(host-independent), runs the full test suite, then:
+
+- creates a **GitHub release** with the raw `h3.wasm` + `build/metadata.js`
+  attached (for hand-instantiating the wasm without the package), and
+- publishes the **npm package** — the `files` whitelist in `package.json`
+  ships exactly `index.js`, `h3.wasm`, and `build/metadata.js` (plus the
+  auto-included `README`/`LICENSE`).
+
+To cut a release:
+
+1. Bump `version` in `package.json` (e.g. `0.1.0`).
+2. Commit and merge to `main`, then tag: `git tag v0.1.0 && git push origin v0.1.0`.
+3. The workflow verifies the tag matches the version, builds, tests, and
+   publishes to npm + GitHub.
+
+The workflow needs an `NPM_TOKEN` repository secret (an npm publishing token
+with access to the `h3-wasm` package). A local `pnpm publish` is guarded by
+`prepublishOnly` (`tools/check-artifacts.mjs`), which refuses to pack if the
+built `h3.wasm` / `build/metadata.js` are missing.
+
 ## Usage
 
 ```js
@@ -230,7 +254,7 @@ mathimpl.c      C libm for wasm32-freestanding
 cvar.c          C varargs support
 cshim/          hand-written C headers (math.h, …) for the freestanding build
 Makefile        2-stage build (support.a → h3.wasm) + metadata generation
-tools/          build helpers (metadata generator)
+tools/          build helpers (metadata generator) + publish guard
 test/           node:test suite (3-way comparison vs h3-js and h3-node)
 h3/             H3 v4.5.0 C library (gitignored; clone it yourself)
 h3-js/ h3-node/ reference checkouts (gitignored; not required to build)

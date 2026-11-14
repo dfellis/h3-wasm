@@ -1,0 +1,89 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0). Must match the package.json version.'
+        required: true
+
+# The h3.wasm artifact is host-independent, so a single ubuntu job builds it,
+# validates it against the full cross-platform test suite, publishes the npm
+# package (which ships h3.wasm + build/metadata.js via the `files` whitelist),
+# and attaches the raw .wasm to a GitHub release for non-npm consumers.
+jobs:
+  release:
+    name: build + publish (npm + GitHub)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the GitHub release
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Set up Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Fetch H3 v4.5.0
+        # Same as the build job in test.yml: fetch the exact tag and generate
+        # h3api.h from h3api.h.in (what CMake's configure_file does upstream).
+        run: |
+          curl -fsSL https://github.com/uber/h3/archive/refs/tags/v4.5.0.tar.gz -o /tmp/h3.tgz
+          mkdir -p h3
+          tar -xzf /tmp/h3.tgz -C h3 --strip-components=1
+          sed -e 's/@H3_VERSION_MAJOR@/4/' -e 's/@H3_VERSION_MINOR@/5/' -e 's/@H3_VERSION_PATCH@/0/' \
+            h3/src/h3lib/include/h3api.h.in > h3/src/h3lib/include/h3api.h
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Build h3.wasm
+        run: make
+
+      - name: Run unit tests
+        run: pnpm test
+
+      - name: Verify tag matches package version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="${RELEASE_TAG#v}"
+          if [ "$version" != "$tag" ]; then
+            echo "::error::Tag '$RELEASE_TAG' does not match package.json version '$version'."
+            exit 1
+          fi
+          echo "Publishing h3-wasm v$version (tag $RELEASE_TAG)"
+
+      - name: Create GitHub release (attach h3.wasm)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            --title "h3-wasm $RELEASE_TAG" \
+            --notes "H3 v4.5.0 compiled to wasm32-freestanding with Zig 0.16.0. Host-independent: runs in Node, browsers, Deno, and Bun. Most users should install from npm (pnpm add h3-wasm); these raw assets are for hand-instantiating the wasm without the package (which ships index.js, h3.wasm, and build/metadata.js)." \
+            h3.wasm build/metadata.js
+
+      # pnpm runs `prepublishOnly` (tools/check-artifacts.mjs) before packing,
+      # then the `files` whitelist controls the tarball. --no-git-checks is
+      # required: we publish from a tag with untracked build artifacts present.
+      - name: Publish to npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm publish --no-git-checks
