@@ -68,6 +68,19 @@ against **both** `h3-js` and `h3-node` on every function:
 - A 3-way benchmark writes `build/benchmark.txt` (per-function ns/call for
   h3-wasm / h3-js / h3-node).
 
+## CI
+
+`.github/workflows/test.yml` mimics h3-node's test workflow:
+
+- A `build` job fetches the H3 v4.5.0 tag, generates `h3api.h` (what
+  CMake's `configure_file` does in a regular H3 build), builds `h3.wasm`
+  once with Zig 0.16.0, and uploads it — the artifact is host-independent,
+  so it is not rebuilt per OS (unlike h3-node's native prebuilds).
+- The `test` matrix runs the suite on ubuntu/windows/macos × node
+  22/24/26, loading h3-node's platform prebuilds as the reference.
+- `test-musl` runs the same suite in a `node:24-alpine` container to
+  cover the musl prebuild, mirroring h3-node's musl job.
+
 ## Usage
 
 ```js
