@@ -228,7 +228,7 @@ export const POLYGON_TO_CELLS_FLAGS = {
 };
 
 // ---------------------------------------------------------------------------
-// Split-long and misc helpers (identical to h3-js)
+// Split-long and misc helpers (behaviorally identical to h3-js)
 // ---------------------------------------------------------------------------
 
 const BASE_16 = 16;
@@ -258,32 +258,17 @@ export function h3IndexToSplitLong(h3Index) {
     return [lower, upper];
 }
 
-function hexFrom32Bit(num) {
-    if (num >= 0) {
-        return num.toString(BASE_16);
-    }
-
-    // Handle negative numbers
-    num = num & 0x7fffffff;
-    let tempStr = zeroPad(8, num.toString(BASE_16));
-    const topNum = (parseInt(tempStr[0], BASE_16) + 8).toString(BASE_16);
-    tempStr = topNum + tempStr.substring(1);
-    return tempStr;
-}
-
 export function splitLongToH3Index(lower, upper) {
     refreshViews();
-    return hexFrom32Bit(upper) + zeroPad(8, hexFrom32Bit(lower));
-}
-
-function zeroPad(fullLen, numStr) {
-    const numZeroes = fullLen - numStr.length;
-    let outStr = '';
-    for (let i = 0; i < numZeroes; i++) {
-        outStr += '0';
-    }
-    outStr = outStr + numStr;
-    return outStr;
+    // `>>> 0` reinterprets each half as unsigned, so a half with the top bit
+    // set — which arrives as a negative signed i32 from numberToSplitLong or a
+    // wasm i32 export — still formats as its 8 hex digits. The upper half is
+    // not padded: a valid H3 index is 15 hex digits, so its upper half
+    // (0x08-0x0a…) is always 7 digits.
+    return (
+        (upper >>> 0).toString(BASE_16) +
+        (lower >>> 0).toString(BASE_16).padStart(8, '0')
+    );
 }
 
 // One more than the max size of an unsigned 32-bit int.
