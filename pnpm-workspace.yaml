@@ -1,2 +1,10 @@
 minimumReleaseAgeExclude:
   - h3-node@4.5.3
+
+# pnpm (>= 11) blocks dependency install scripts by default and fails the
+# install unless each build-capable package is ruled on in allowBuilds.
+# h3-node's script (node-gyp-build-test -> node-gyp-build) is a no-op on
+# every platform where its npm package ships a prebuild, and is the
+# fallback that compiles the native module when none exists.
+allowBuilds:
+  h3-node: true

@@ -4,6 +4,7 @@
   "description": "WASM-compiled H3 v4.5.0 for Node and Browser, built from the C library with Zig",
   "main": "index.js",
   "type": "module",
+  "packageManager": "pnpm@12.18.0",
   "directories": {
     "test": "test"
   },
