@@ -1,264 +1,594 @@
-const std = @import("std");
-const h3 = @cImport({
-    @cInclude("h3api.h");
-});
+//! WASM binding root for the H3 v4.5.0 C library.
+//!
+//! This module is the Zig root of the final shared object. It declares the
+//! h3 C API and re-exposes it as `bind__*` wasm exports with a flat
+//! i32/f64 argument ABI chosen for the JS layer:
+//!
+//!  - 64-bit H3Index values are passed as a `(lower, upper)` pair of i32s
+//!    (little-endian halves), matching h3-js's "split long" convention.
+//!  - Scalar outputs (i32/i64/f64) are written into JS-owned memory at a
+//!    caller-provided byte offset.
+//!  - Index arrays are written into caller-provided byte offsets, 8 bytes
+//!    per H3Index, with 0 used as the "no value" sentinel (h3-js skips 0s).
+//!
+//! All exports return the h3 H3Error code (u32) where the C function reports
+//! one; functions without error reporting return the value directly.
+//!
+//! Note: wasm32-freestanding has no `callconv(.C)`; the default `export`
+//! calling convention is the wasm ABI, which is what zig cc's C code uses.
+//! Export names must not collide with C-defined symbols (duplicate symbol at
+//! link time), hence the `bind__` prefix.
 
-// TODO: Why aren't these implemented by the musl bindings? At least confirmed these exactly match
-// the "real" math.h implementations.
-export fn lroundl(x: c_longdouble) c_long {
-    return @intFromFloat(@round(x));
+// ---------------------------------------------------------------------------
+// C API declarations
+// ---------------------------------------------------------------------------
+
+const LatLng = extern struct {
+    lat: f64,
+    lng: f64,
+};
+
+const CellBoundary = extern struct {
+    numVerts: i32,
+    _pad: u32,
+    verts: [10]LatLng,
+};
+
+const GeoLoop = extern struct {
+    numVerts: i32,
+    verts: ?*const LatLng,
+};
+
+const GeoPolygon = extern struct {
+    geoloop: GeoLoop,
+    numHoles: i32,
+    holes: ?*const GeoLoop,
+};
+
+const LinkedLatLng = extern struct {
+    vertex: LatLng,
+    next: ?*LinkedLatLng,
+};
+
+const LinkedGeoLoop = extern struct {
+    first: ?*LinkedLatLng,
+    last: ?*LinkedLatLng,
+    next: ?*LinkedGeoLoop,
+};
+
+const LinkedGeoPolygon = extern struct {
+    first: ?*LinkedGeoLoop,
+    last: ?*LinkedGeoLoop,
+    next: ?*LinkedGeoPolygon,
+};
+
+const CoordIJ = extern struct {
+    i: i32,
+    j: i32,
+};
+
+const H3Index = u64;
+const H3Error = u32;
+
+extern fn isValidCell(h: H3Index) c_int;
+extern fn isValidIndex(h: H3Index) c_int;
+extern fn isPentagon(h: H3Index) c_int;
+extern fn isResClassIII(h: H3Index) c_int;
+extern fn isValidDirectedEdge(edge: H3Index) c_int;
+extern fn isValidVertex(vertex: H3Index) c_int;
+extern fn getBaseCellNumber(h: H3Index) c_int;
+extern fn getResolution(h: H3Index) c_int;
+extern fn getIndexDigit(h: H3Index, res: c_int, out: ?*c_int) H3Error;
+extern fn maxFaceCount(h3: H3Index, out: ?*c_int) H3Error;
+extern fn getIcosahedronFaces(h3: H3Index, out: ?*c_int) H3Error;
+extern fn getNumCells(res: c_int, out: ?*i64) H3Error;
+extern fn res0CellCount() c_int;
+extern fn getRes0Cells(out: ?*H3Index) H3Error;
+extern fn pentagonCount() c_int;
+extern fn getPentagons(res: c_int, out: ?*H3Index) H3Error;
+extern fn constructCell(res: c_int, baseCellNumber: c_int, digits: ?*const c_int, out: ?*H3Index) H3Error;
+extern fn latLngToCell(g: ?*const LatLng, res: c_int, out: ?*H3Index) H3Error;
+extern fn cellToLatLng(h3: H3Index, g: ?*LatLng) H3Error;
+extern fn cellToBoundary(h3: H3Index, gp: ?*CellBoundary) H3Error;
+extern fn cellToParent(h3: H3Index, parentRes: c_int, parent: ?*H3Index) H3Error;
+extern fn cellToChildrenSize(h: H3Index, childRes: c_int, out: ?*i64) H3Error;
+extern fn cellToChildren(h: H3Index, childRes: c_int, children: ?*H3Index) H3Error;
+extern fn cellToCenterChild(h: H3Index, childRes: c_int, child: ?*H3Index) H3Error;
+extern fn cellToChildPos(child: H3Index, parentRes: c_int, out: ?*i64) H3Error;
+extern fn childPosToCell(childPos: i64, parent: H3Index, childRes: c_int, child: ?*H3Index) H3Error;
+extern fn maxGridDiskSize(k: c_int, out: ?*i64) H3Error;
+extern fn maxGridRingSize(k: c_int, out: ?*i64) H3Error;
+extern fn gridDisk(origin: H3Index, k: c_int, out: ?*H3Index) H3Error;
+extern fn gridDiskDistances(origin: H3Index, k: c_int, out: ?*H3Index, distances: ?*c_int) H3Error;
+extern fn gridRing(origin: H3Index, k: c_int, out: ?*H3Index) H3Error;
+extern fn gridRingUnsafe(origin: H3Index, k: c_int, out: ?*H3Index) H3Error;
+extern fn maxPolygonToCellsSize(geoPolygon: ?*const GeoPolygon, res: c_int, flags: u32, out: ?*i64) H3Error;
+extern fn polygonToCells(geoPolygon: ?*const GeoPolygon, res: c_int, flags: u32, out: ?*H3Index) H3Error;
+extern fn maxPolygonToCellsSizeExperimental(polygon: ?*const GeoPolygon, res: c_int, flags: u32, out: ?*i64) H3Error;
+extern fn polygonToCellsExperimental(polygon: ?*const GeoPolygon, res: c_int, flags: u32, size: i64, out: ?*H3Index) H3Error;
+extern fn cellsToLinkedMultiPolygon(h3Set: ?*const H3Index, numHexes: c_int, out: ?*LinkedGeoPolygon) H3Error;
+extern fn destroyLinkedMultiPolygon(polygon: ?*LinkedGeoPolygon) void;
+extern fn compactCells(h3Set: ?*const H3Index, compactedSet: ?*H3Index, numHexes: i64) H3Error;
+extern fn uncompactCellsSize(compactedSet: ?*const H3Index, numCompacted: i64, res: c_int, out: ?*i64) H3Error;
+extern fn uncompactCells(compactedSet: ?*const H3Index, numCompacted: i64, outSet: ?*H3Index, numOut: i64, res: c_int) H3Error;
+extern fn areNeighborCells(origin: H3Index, destination: H3Index, out: ?*c_int) H3Error;
+extern fn cellsToDirectedEdge(origin: H3Index, destination: H3Index, out: ?*H3Index) H3Error;
+extern fn getDirectedEdgeOrigin(edge: H3Index, out: ?*H3Index) H3Error;
+extern fn getDirectedEdgeDestination(edge: H3Index, out: ?*H3Index) H3Error;
+extern fn directedEdgeToCells(edge: H3Index, originDestination: ?*H3Index) H3Error;
+extern fn originToDirectedEdges(origin: H3Index, edges: ?*H3Index) H3Error;
+extern fn directedEdgeToBoundary(edge: H3Index, gb: ?*CellBoundary) H3Error;
+extern fn reverseDirectedEdge(edge: H3Index, out: ?*H3Index) H3Error;
+extern fn gridDistance(origin: H3Index, h3: H3Index, distance: ?*i64) H3Error;
+extern fn gridPathCellsSize(start: H3Index, end: H3Index, size: ?*i64) H3Error;
+extern fn gridPathCells(start: H3Index, end: H3Index, out: ?*H3Index) H3Error;
+extern fn cellToLocalIj(origin: H3Index, h3: H3Index, mode: u32, out: ?*CoordIJ) H3Error;
+extern fn localIjToCell(origin: H3Index, ij: ?*const CoordIJ, mode: u32, out: ?*H3Index) H3Error;
+extern fn greatCircleDistanceRads(a: ?*const LatLng, b: ?*const LatLng) f64;
+extern fn greatCircleDistanceKm(a: ?*const LatLng, b: ?*const LatLng) f64;
+extern fn greatCircleDistanceM(a: ?*const LatLng, b: ?*const LatLng) f64;
+extern fn cellAreaRads2(h: H3Index, out: ?*f64) H3Error;
+extern fn cellAreaKm2(h: H3Index, out: ?*f64) H3Error;
+extern fn cellAreaM2(h: H3Index, out: ?*f64) H3Error;
+extern fn edgeLengthRads(edge: H3Index, length: ?*f64) H3Error;
+extern fn edgeLengthKm(edge: H3Index, length: ?*f64) H3Error;
+extern fn edgeLengthM(edge: H3Index, length: ?*f64) H3Error;
+extern fn getHexagonAreaAvgKm2(res: c_int, out: ?*f64) H3Error;
+extern fn getHexagonAreaAvgM2(res: c_int, out: ?*f64) H3Error;
+extern fn getHexagonEdgeLengthAvgKm(res: c_int, out: ?*f64) H3Error;
+extern fn getHexagonEdgeLengthAvgM(res: c_int, out: ?*f64) H3Error;
+extern fn cellToVertex(origin: H3Index, vertexNum: c_int, out: ?*H3Index) H3Error;
+extern fn cellToVertexes(origin: H3Index, vertexes: ?*H3Index) H3Error;
+extern fn vertexToLatLng(vertex: H3Index, point: ?*LatLng) H3Error;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Combine the little-endian 32-bit halves of a split long into an H3Index.
+fn idx(lo: i32, hi: i32) H3Index {
+    return @as(u32, @bitCast(lo)) | (@as(u64, @as(u32, @bitCast(hi))) << 32);
 }
 
-export fn asin(x: f64) f64 {
-    return std.math.asin(x);
+/// Byte-offset -> optional pointer (for C output params).
+fn optptr(comptime T: type, off: i32) ?*T {
+    return @ptrFromInt(@as(usize, @intCast(off)));
 }
 
-export fn acos(x: f64) f64 {
-    return std.math.acos(x);
+/// Byte-offset -> optional const pointer (for C input structs).
+fn constoptptr(comptime T: type, off: i32) ?*const T {
+    return @ptrFromInt(@as(usize, @intCast(off)));
 }
 
-export fn atan(x: f64) f64 {
-    return std.math.atan(x);
+// ---------------------------------------------------------------------------
+// Core predicates and inspection
+// ---------------------------------------------------------------------------
+
+export fn bind__isValidCell(lo: i32, hi: i32) i32 {
+    return isValidCell(idx(lo, hi));
 }
 
-export fn atan2(y: f64, x: f64) f64 {
-    return std.math.atan2(f64, y, x);
+export fn bind__isValidIndex(lo: i32, hi: i32) i32 {
+    return isValidIndex(idx(lo, hi));
 }
 
-// Only h3ToString uses sprintf, which for some reason is not included in the WASM musl libc, so
-// instead just re-implementing h3ToString with a non-exported variant as it's a lot easier
-fn h3ToString(cell: h3.H3Index, mem: *[17]u8) void {
-    _ = std.fmt.bufPrint(mem, "{x}", .{cell}) catch 0;
+export fn bind__isPentagon(lo: i32, hi: i32) i32 {
+    return isPentagon(idx(lo, hi));
 }
 
-// Similarly, only stringToH3 uses sscanf so just reimplementing it. Not sure why these functions
-// aren't being properly defined, though. :/
-fn stringToH3(cellStr: [*]u8) !h3.H3Index {
-    return std.fmt.parseInt(u64, cellStr[0..15], 16);
+export fn bind__isResClassIII(lo: i32, hi: i32) i32 {
+    return isResClassIII(idx(lo, hi));
 }
 
-// Binding API. Basic JSON object manipulation using handle-like ID mechanism. All binding functions
-// return an ID they acquire from this API with the actual value(s) attached to it. The supported
-// values to associate with an ID are int32s, strings, booleans, and JS Arrays, Objects, and Errors.
-// The JS array and object types can have any of the other types (excluding errors) attached to them
-// with complex nesting such as objects inside of arrays done by constructing all of the objects and
-// then adding the object by ID to the array. You can only add elements to the array in order and
-// you can only add new key-value pairs to the objects, so don't mess up! ;) You can read int32s and
-// strings only
-
-// Root object creation. Returns the handle ID.
-extern fn makeArr() u32;
-extern fn makeObj() u32;
-extern fn makeErr(u32) u32;
-extern fn makeInt32(i32) u32;
-extern fn makeStr([*]u8) u32;
-extern fn makeBool(c_int) u32;
-// Root object reads. Returns pointer to desired data. Only ints and strings for now.
-extern fn getInt32(u32) *i32;
-extern fn getDouble(u32) *f64;
-extern fn getStr(u32) [*c]u8;
-// Array manipulation. Takes the handle ID and the value to append to the array.
-extern fn appendInt32(u32, i32) void;
-extern fn appendDouble(u32, f64) void;
-extern fn appendStr(u32, [*]u8) void;
-extern fn appendBool(u32, c_int) void;
-extern fn appendObj(u32, u32) void;
-// Object manipulation. Takes the handle ID, the key string, and the value to add to the object.
-extern fn addInt32(u32, [*]u8, i32) void;
-extern fn addDouble(u32, [*]u8, f64) void;
-extern fn addStr(u32, [*]u8, [*]u8) void;
-extern fn addBool(u32, [*]u8, c_int) void;
-extern fn addObj(u32, [*]u8, u32) void;
-// Debugging tool
-extern fn consoleLog([*]const u8) void;
-
-// Memory management functions to provide to JS side
-export fn alloc(size: usize) [*]u8 {
-    const allocator = std.heap.page_allocator;
-    const dummy: [1]u8 = .{0};
-
-    const memory = allocator.alloc(u8, size) catch &dummy;
-    return @ptrCast(@constCast(memory));
+export fn bind__isValidDirectedEdge(lo: i32, hi: i32) i32 {
+    return isValidDirectedEdge(idx(lo, hi));
 }
 
-// Zig generics are wonky, so not trying until I better understand them
-export fn freef64(ptr: *f64) void {
-    const i: usize = @intFromPtr(ptr);
-    const p: [*]u8 = @ptrFromInt(i);
-    const slice = p[0..8];
-    const allocator = std.heap.page_allocator;
-    allocator.free(slice);
+export fn bind__isValidVertex(lo: i32, hi: i32) i32 {
+    return isValidVertex(idx(lo, hi));
 }
 
-export fn freei32(ptr: *i32) void {
-    const i: usize = @intFromPtr(ptr);
-    const p: [*]u8 = @ptrFromInt(i);
-    const slice = p[0..4];
-    const allocator = std.heap.page_allocator;
-    allocator.free(slice);
+export fn bind__getBaseCellNumber(lo: i32, hi: i32) i32 {
+    return getBaseCellNumber(idx(lo, hi));
 }
 
-export fn freestr(ptr: [*]u8, size: usize) void {
-    const allocator = std.heap.page_allocator;
-    const slice = ptr[0..size];
-    allocator.free(slice);
+export fn bind__getResolution(lo: i32, hi: i32) i32 {
+    return getResolution(idx(lo, hi));
 }
 
-// Actual binding functions, prefixed with `bind__` to prevent collisions with the C functions with
-// the same name.
-
-export fn bind__helloWorld() u32 {
-    return makeStr(@constCast("Hello, World!"));
+export fn bind__getIndexDigit(lo: i32, hi: i32, digit: i32, out: i32) u32 {
+    return getIndexDigit(idx(lo, hi), digit, optptr(c_int, out));
 }
 
-export fn bind__greet() u32 {
-    const allocator = std.heap.page_allocator;
-    const name = getStr(0);
-    const len = std.mem.len(name);
-    var dummy: [1]u8 = .{0};
-    var out = allocator.alloc(u8, len + 9) catch &dummy;
-    _ = std.fmt.bufPrint(out, "Hello, {s}!", .{name}) catch &dummy;
-    return makeStr(out.ptr);
+export fn bind__maxFaceCount(lo: i32, hi: i32, out: i32) u32 {
+    return maxFaceCount(idx(lo, hi), optptr(c_int, out));
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// Indexing Functions                                                        //
-///////////////////////////////////////////////////////////////////////////////
-
-export fn bind__latLngToCell() u32 {
-    const lat = getDouble(0);
-    defer freef64(lat);
-    const lng = getDouble(1);
-    defer freef64(lng);
-    const res = getInt32(2);
-    defer freei32(res);
-    var cell: u64 = 0;
-    const latLng = h3.LatLng{ .lat = h3.degsToRads(lat.*), .lng = h3.degsToRads(lng.*) };
-    const err = h3.latLngToCell(&latLng, res.*, &cell);
-    if (err > 0) {
-        return makeErr(err);
-    }
-    var cellStr = std.mem.zeroes([17]u8);
-    h3ToString(cell, &cellStr);
-    return makeStr(&cellStr);
+export fn bind__getIcosahedronFaces(lo: i32, hi: i32, out: i32) u32 {
+    return getIcosahedronFaces(idx(lo, hi), optptr(c_int, out));
 }
 
-export fn bind__cellToLatLng() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
-    var latLng = h3.LatLng{ .lat = 0, .lng = 0 };
-    const err = h3.cellToLatLng(cell, &latLng);
-    if (err > 0) {
-        return makeErr(err);
-    }
-    const out = makeArr();
-    appendDouble(out, h3.radsToDegs(latLng.lat));
-    appendDouble(out, h3.radsToDegs(latLng.lng));
-    return out;
+export fn bind__getNumCells(res: i32, out: i32) u32 {
+    return getNumCells(res, optptr(i64, out));
 }
 
-export fn bind__cellToBoundary() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
-
-    var cellBoundary = std.mem.zeroes(h3.CellBoundary);
-    const err = h3.cellToBoundary(cell, &cellBoundary);
-    if (err > 0) {
-        return makeErr(err);
-    }
-    const out = makeArr();
-    // Zig, you're just making this more awkward...
-    var i: usize = 0;
-    while (i < cellBoundary.numVerts) {
-        const latLng = makeArr();
-        appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lat));
-        appendDouble(latLng, h3.radsToDegs(cellBoundary.verts[i].lng));
-        appendObj(out, latLng);
-        i += 1;
-    }
-    return out;
+export fn bind__res0CellCount() i32 {
+    return res0CellCount();
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// Inspection Functions                                                      //
-///////////////////////////////////////////////////////////////////////////////
-
-export fn bind__getResolution() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
-
-    return makeInt32(h3.getResolution(cell));
+export fn bind__getRes0Cells(out: i32) u32 {
+    return getRes0Cells(optptr(H3Index, out));
 }
 
-export fn bind__isValidCell() u32 {
-    // TODO: Add the array and typed array support
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
-
-    return makeBool(h3.isValidCell(cell));
+export fn bind__pentagonCount() i32 {
+    return pentagonCount();
 }
 
-export fn bind__isResClassIII() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
-
-    return makeBool(h3.isResClassIII(cell));
+export fn bind__getPentagons(res: i32, out: i32) u32 {
+    return getPentagons(res, optptr(H3Index, out));
 }
 
-export fn bind__isPentagon() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
+// ---------------------------------------------------------------------------
+// Construction and basic conversion
+// ---------------------------------------------------------------------------
 
-    return makeBool(h3.isPentagon(cell));
+export fn bind__constructCell(res: i32, baseCellNumber: i32, digits: i32, out: i32) u32 {
+    return constructCell(res, baseCellNumber, constoptptr(c_int, digits), optptr(H3Index, out));
 }
 
-export fn bind__getIcosahedronFaces() u32 {
-    const cellStr = getStr(0);
-    defer freestr(cellStr, 16);
-    const cell = stringToH3(cellStr) catch 0;
-    if (cell == 0) {
-        return makeErr(1);
-    }
+export fn bind__latLngToCell(lat: f64, lng: f64, res: i32, out: i32) u32 {
+    var g = LatLng{ .lat = lat, .lng = lng };
+    return latLngToCell(&g, res, optptr(H3Index, out));
+}
 
-    // I know I'm supposed to use `maxFaceCount`, but it's always going to be <= 5, so I'm just
-    // statically allocating at that maximum
-    var faces = [5]i32{ -1, -1, -1, -1, -1 };
+export fn bind__cellToLatLng(lo: i32, hi: i32, out: i32) u32 {
+    return cellToLatLng(idx(lo, hi), optptr(LatLng, out));
+}
 
-    const err = h3.getIcosahedronFaces(cell, &faces);
-    if (err > 0) {
-        return makeErr(err);
-    }
-    const out = makeArr();
-    var i: u8 = 0;
-    while (i < 5) {
-        if (faces[i] >= 0) {
-            appendInt32(out, faces[i]);
+export fn bind__cellToBoundary(lo: i32, hi: i32, out: i32) u32 {
+    return cellToBoundary(idx(lo, hi), optptr(CellBoundary, out));
+}
+
+// ---------------------------------------------------------------------------
+// Hierarchy
+// ---------------------------------------------------------------------------
+
+export fn bind__cellToParent(lo: i32, hi: i32, parentRes: i32, out: i32) u32 {
+    return cellToParent(idx(lo, hi), parentRes, optptr(H3Index, out));
+}
+
+export fn bind__cellToChildrenSize(lo: i32, hi: i32, childRes: i32, out: i32) u32 {
+    return cellToChildrenSize(idx(lo, hi), childRes, optptr(i64, out));
+}
+
+export fn bind__cellToChildren(lo: i32, hi: i32, childRes: i32, out: i32) u32 {
+    return cellToChildren(idx(lo, hi), childRes, optptr(H3Index, out));
+}
+
+export fn bind__cellToCenterChild(lo: i32, hi: i32, childRes: i32, out: i32) u32 {
+    return cellToCenterChild(idx(lo, hi), childRes, optptr(H3Index, out));
+}
+
+export fn bind__cellToChildPos(lo: i32, hi: i32, parentRes: i32, out: i32) u32 {
+    return cellToChildPos(idx(lo, hi), parentRes, optptr(i64, out));
+}
+
+export fn bind__childPosToCell(cpLo: i32, cpHi: i32, parentLo: i32, parentHi: i32, childRes: i32, out: i32) u32 {
+    const childPos: i64 = @bitCast(@as(u32, @bitCast(cpLo)) | (@as(u64, @as(u32, @bitCast(cpHi))) << 32));
+    return childPosToCell(childPos, idx(parentLo, parentHi), childRes, optptr(H3Index, out));
+}
+
+// ---------------------------------------------------------------------------
+// Grid algorithms
+// ---------------------------------------------------------------------------
+
+export fn bind__maxGridDiskSize(k: i32, out: i32) u32 {
+    return maxGridDiskSize(k, optptr(i64, out));
+}
+
+export fn bind__maxGridRingSize(k: i32, out: i32) u32 {
+    return maxGridRingSize(k, optptr(i64, out));
+}
+
+export fn bind__gridDisk(lo: i32, hi: i32, k: i32, out: i32) u32 {
+    return gridDisk(idx(lo, hi), k, optptr(H3Index, out));
+}
+
+export fn bind__gridDiskDistances(lo: i32, hi: i32, k: i32, outIdx: i32, outDist: i32) u32 {
+    return gridDiskDistances(idx(lo, hi), k, optptr(H3Index, outIdx), optptr(c_int, outDist));
+}
+
+export fn bind__gridRing(lo: i32, hi: i32, k: i32, out: i32) u32 {
+    return gridRing(idx(lo, hi), k, optptr(H3Index, out));
+}
+
+export fn bind__gridRingUnsafe(lo: i32, hi: i32, k: i32, out: i32) u32 {
+    return gridRingUnsafe(idx(lo, hi), k, optptr(H3Index, out));
+}
+
+// ---------------------------------------------------------------------------
+// Polyfill
+// ---------------------------------------------------------------------------
+
+export fn bind__maxPolygonToCellsSize(poly: i32, res: i32, flags: u32, out: i32) u32 {
+    return maxPolygonToCellsSize(constoptptr(GeoPolygon, poly), res, flags, optptr(i64, out));
+}
+
+export fn bind__polygonToCells(poly: i32, res: i32, flags: u32, out: i32) u32 {
+    return polygonToCells(constoptptr(GeoPolygon, poly), res, flags, optptr(H3Index, out));
+}
+
+export fn bind__maxPolygonToCellsSizeExperimental(poly: i32, res: i32, flags: u32, out: i32) u32 {
+    return maxPolygonToCellsSizeExperimental(constoptptr(GeoPolygon, poly), res, flags, optptr(i64, out));
+}
+
+export fn bind__polygonToCellsExperimental(poly: i32, res: i32, flags: u32, sizeLo: i32, sizeHi: i32, out: i32) u32 {
+    const size: i64 = @bitCast(@as(u32, @bitCast(sizeLo)) | (@as(u64, @as(u32, @bitCast(sizeHi))) << 32));
+    return polygonToCellsExperimental(constoptptr(GeoPolygon, poly), res, flags, size, optptr(H3Index, out));
+}
+
+export fn bind__cellsToLinkedMultiPolygon(set: i32, numHexes: i32, out: i32) u32 {
+    return cellsToLinkedMultiPolygon(constoptptr(H3Index, set), numHexes, optptr(LinkedGeoPolygon, out));
+}
+
+export fn bind__destroyLinkedMultiPolygon(poly: i32) void {
+    destroyLinkedMultiPolygon(optptr(LinkedGeoPolygon, poly));
+}
+
+/// Defensive cap on walk length; a corrupted list must not hang the module.
+const MAX_FLAT_WALK = 0x7fffffff;
+
+/// Writes [numPolygons, numLoopsTotal, numCoordsTotal] as three i32s.
+/// Returns E_SUCCESS (0) or E_FAILED (1) if a walk exceeds MAX_FLAT_WALK
+/// (corrupted structure).
+export fn bind__linkedMultiPolygonInfo(poly: i32, out: i32) u32 {
+    var cur: ?*const LinkedGeoPolygon = constoptptr(LinkedGeoPolygon, poly);
+    var numPolygons: i32 = 0;
+    var numLoops: i32 = 0;
+    var numCoords: i32 = 0;
+    while (cur) |cp| {
+        numPolygons += 1;
+        var loop: ?*const LinkedGeoLoop = cp.first;
+        while (loop) |cl| {
+            numLoops += 1;
+            var coord: ?*const LinkedLatLng = cl.first;
+            while (coord) |cc| {
+                numCoords += 1;
+                if (numCoords > MAX_FLAT_WALK) return 1;
+                coord = cc.next;
+            }
+            loop = cl.next;
         }
-        i += 1;
+        cur = cp.next;
     }
-    return out;
+    const o = @as([*]i32, @ptrFromInt(@as(usize, @intCast(out))));
+    o[0] = numPolygons;
+    o[1] = numLoops;
+    o[2] = numCoords;
+    return 0;
+}
+
+/// Flattens a LinkedGeoPolygon into JS-owned memory:
+///   - numPolygons i32s: loop count per polygon
+///   - numLoopsTotal i32s: coordinate count per loop
+///   - numCoordsTotal LatLng structs (lat, lng, radians, in walk order)
+/// JS must have called bind__linkedMultiPolygonInfo first to size the buffer.
+/// Returns E_SUCCESS (0) or E_FAILED (1) if a walk exceeds MAX_FLAT_WALK
+/// (corrupted structure).
+export fn bind__flattenLinkedMultiPolygon(poly: i32, out: i32) u32 {
+    const oi = @as([*]i32, @ptrFromInt(@as(usize, @intCast(out))));
+    const of = @as([*]f64, @ptrFromInt(@as(usize, @intCast(out))));
+    var pos: usize = 0;
+    var steps: i32 = 0;
+
+    // Pass 1: loop count per polygon.
+    var cur: ?*const LinkedGeoPolygon = constoptptr(LinkedGeoPolygon, poly);
+    while (cur) |cp| {
+        var loopCount: i32 = 0;
+        var loop: ?*const LinkedGeoLoop = cp.first;
+        while (loop) |cl| {
+            loopCount += 1;
+            loop = cl.next;
+        }
+        oi[pos >> 2] = loopCount;
+        pos += 4;
+        cur = cp.next;
+    }
+
+    // Pass 2: coordinate count per loop (walk order).
+    cur = constoptptr(LinkedGeoPolygon, poly);
+    while (cur) |cp| {
+        var loop: ?*const LinkedGeoLoop = cp.first;
+        while (loop) |cl| {
+            var coordCount: i32 = 0;
+            var coord: ?*const LinkedLatLng = cl.first;
+            while (coord) |cc| {
+                coordCount += 1;
+                steps += 1;
+                if (steps > MAX_FLAT_WALK) return 1;
+                coord = cc.next;
+            }
+            oi[pos >> 2] = coordCount;
+            pos += 4;
+            loop = cl.next;
+        }
+        cur = cp.next;
+    }
+
+    // Pass 3: the coordinates themselves (walk order).
+    cur = constoptptr(LinkedGeoPolygon, poly);
+    while (cur) |cp| {
+        var loop: ?*const LinkedGeoLoop = cp.first;
+        while (loop) |cl| {
+            var coord: ?*const LinkedLatLng = cl.first;
+            while (coord) |cc| {
+                of[pos >> 3] = cc.vertex.lat;
+                of[(pos >> 3) + 1] = cc.vertex.lng;
+                pos += 16;
+                coord = cc.next;
+            }
+            loop = cl.next;
+        }
+        cur = cp.next;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Compaction
+// ---------------------------------------------------------------------------
+
+export fn bind__compactCells(set: i32, out: i32, numHexes: i32) u32 {
+    return compactCells(constoptptr(H3Index, set), optptr(H3Index, out), numHexes);
+}
+
+export fn bind__uncompactCellsSize(set: i32, numCompacted: i32, res: i32, out: i32) u32 {
+    return uncompactCellsSize(optptr(H3Index, set), numCompacted, res, optptr(i64, out));
+}
+
+export fn bind__uncompactCells(set: i32, numCompacted: i32, out: i32, numOut: i32, res: i32) u32 {
+    return uncompactCells(constoptptr(H3Index, set), numCompacted, optptr(H3Index, out), numOut, res);
+}
+
+// ---------------------------------------------------------------------------
+// Directed edges
+// ---------------------------------------------------------------------------
+
+export fn bind__areNeighborCells(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return areNeighborCells(idx(oLo, oHi), idx(dLo, dHi), optptr(c_int, out));
+}
+
+export fn bind__cellsToDirectedEdge(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return cellsToDirectedEdge(idx(oLo, oHi), idx(dLo, dHi), optptr(H3Index, out));
+}
+
+export fn bind__getDirectedEdgeOrigin(lo: i32, hi: i32, out: i32) u32 {
+    return getDirectedEdgeOrigin(idx(lo, hi), optptr(H3Index, out));
+}
+
+export fn bind__getDirectedEdgeDestination(lo: i32, hi: i32, out: i32) u32 {
+    return getDirectedEdgeDestination(idx(lo, hi), optptr(H3Index, out));
+}
+
+export fn bind__directedEdgeToCells(lo: i32, hi: i32, out: i32) u32 {
+    return directedEdgeToCells(idx(lo, hi), optptr(H3Index, out));
+}
+
+export fn bind__originToDirectedEdges(lo: i32, hi: i32, out: i32) u32 {
+    return originToDirectedEdges(idx(lo, hi), optptr(H3Index, out));
+}
+
+export fn bind__directedEdgeToBoundary(lo: i32, hi: i32, out: i32) u32 {
+    return directedEdgeToBoundary(idx(lo, hi), optptr(CellBoundary, out));
+}
+
+export fn bind__reverseDirectedEdge(lo: i32, hi: i32, out: i32) u32 {
+    return reverseDirectedEdge(idx(lo, hi), optptr(H3Index, out));
+}
+
+// ---------------------------------------------------------------------------
+// Grid distance / path
+// ---------------------------------------------------------------------------
+
+export fn bind__gridDistance(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return gridDistance(idx(oLo, oHi), idx(dLo, dHi), optptr(i64, out));
+}
+
+export fn bind__gridPathCellsSize(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return gridPathCellsSize(idx(oLo, oHi), idx(dLo, dHi), optptr(i64, out));
+}
+
+export fn bind__gridPathCells(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return gridPathCells(idx(oLo, oHi), idx(dLo, dHi), optptr(H3Index, out));
+}
+
+// ---------------------------------------------------------------------------
+// Local IJ coordinates
+// ---------------------------------------------------------------------------
+
+export fn bind__cellToLocalIj(oLo: i32, oHi: i32, dLo: i32, dHi: i32, out: i32) u32 {
+    return cellToLocalIj(idx(oLo, oHi), idx(dLo, dHi), 0, optptr(CoordIJ, out));
+}
+
+export fn bind__localIjToCell(oLo: i32, oHi: i32, i: i32, j: i32, out: i32) u32 {
+    var ij = CoordIJ{ .i = i, .j = j };
+    return localIjToCell(idx(oLo, oHi), &ij, 0, optptr(H3Index, out));
+}
+
+// ---------------------------------------------------------------------------
+// Distance / area
+// ---------------------------------------------------------------------------
+
+export fn bind__greatCircleDistanceRads(lat1: f64, lng1: f64, lat2: f64, lng2: f64) f64 {
+    var a = LatLng{ .lat = lat1, .lng = lng1 };
+    var b = LatLng{ .lat = lat2, .lng = lng2 };
+    return greatCircleDistanceRads(&a, &b);
+}
+
+export fn bind__greatCircleDistanceKm(lat1: f64, lng1: f64, lat2: f64, lng2: f64) f64 {
+    var a = LatLng{ .lat = lat1, .lng = lng1 };
+    var b = LatLng{ .lat = lat2, .lng = lng2 };
+    return greatCircleDistanceKm(&a, &b);
+}
+
+export fn bind__greatCircleDistanceM(lat1: f64, lng1: f64, lat2: f64, lng2: f64) f64 {
+    var a = LatLng{ .lat = lat1, .lng = lng1 };
+    var b = LatLng{ .lat = lat2, .lng = lng2 };
+    return greatCircleDistanceM(&a, &b);
+}
+
+export fn bind__cellAreaRads2(lo: i32, hi: i32, out: i32) u32 {
+    return cellAreaRads2(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__cellAreaKm2(lo: i32, hi: i32, out: i32) u32 {
+    return cellAreaKm2(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__cellAreaM2(lo: i32, hi: i32, out: i32) u32 {
+    return cellAreaM2(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__edgeLengthRads(lo: i32, hi: i32, out: i32) u32 {
+    return edgeLengthRads(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__edgeLengthKm(lo: i32, hi: i32, out: i32) u32 {
+    return edgeLengthKm(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__edgeLengthM(lo: i32, hi: i32, out: i32) u32 {
+    return edgeLengthM(idx(lo, hi), optptr(f64, out));
+}
+
+export fn bind__getHexagonAreaAvgM2(res: i32, out: i32) u32 {
+    return getHexagonAreaAvgM2(res, optptr(f64, out));
+}
+
+export fn bind__getHexagonAreaAvgKm2(res: i32, out: i32) u32 {
+    return getHexagonAreaAvgKm2(res, optptr(f64, out));
+}
+
+export fn bind__getHexagonEdgeLengthAvgM(res: i32, out: i32) u32 {
+    return getHexagonEdgeLengthAvgM(res, optptr(f64, out));
+}
+
+export fn bind__getHexagonEdgeLengthAvgKm(res: i32, out: i32) u32 {
+    return getHexagonEdgeLengthAvgKm(res, optptr(f64, out));
+}
+
+// ---------------------------------------------------------------------------
+// Vertex mode
+// ---------------------------------------------------------------------------
+
+export fn bind__cellToVertex(lo: i32, hi: i32, vertexNum: i32, out: i32) u32 {
+    return cellToVertex(idx(lo, hi), vertexNum, optptr(H3Index, out));
+}
+
+export fn bind__cellToVertexes(lo: i32, hi: i32, out: i32) u32 {
+    return cellToVertexes(idx(lo, hi), optptr(H3Index, out));
+}
+
+export fn bind__vertexToLatLng(lo: i32, hi: i32, out: i32) u32 {
+    return vertexToLatLng(idx(lo, hi), optptr(LatLng, out));
 }

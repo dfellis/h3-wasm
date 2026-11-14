@@ -1,0 +1,2 @@
+minimumReleaseAgeExclude:
+  - h3-node@4.5.3

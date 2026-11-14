@@ -1,5 +1,9 @@
 h3/
+h3-js/
+h3-node/
 node_modules/
+build/
 *.swp
 *.wasm
 *.o
+.zig-cache/
