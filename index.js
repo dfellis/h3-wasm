@@ -642,13 +642,14 @@ export function cellToParent(h3Index, res) {
 export function cellToChildren(h3Index, res) {
     refreshViews();
     releaseScratch();
-    // Bad input in this case can potentially result in high computation volume
-    // using the current C algorithm. Validate and return an empty array on failure.
-    if (!isValidCell(h3Index)) {
-        return [];
-    }
-    const [lo, hi] = h3IndexToSplitLong(h3Index);
+    // C's cellToChildren does not validate its input: an invalid (nonzero)
+    // cell at a high child resolution makes the child iterator run 7^n
+    // times (up to ~4.7e12), so cellToChildrenSize (below) validates the
+    // cell up front and throws E_CELL_INVALID. h3-js instead returns []
+    // here; like h3-node's malformed-input handling, we treat it as a
+    // caller error.
     const count = validateArrayLength(cellToChildrenSize(h3Index, res));
+    const [lo, hi] = h3IndexToSplitLong(h3Index);
     const hexagons = callocArray(count, 8);
     refreshViews();
     throwIfError(H3.bind__cellToChildren(lo, hi, res, hexagons));
@@ -659,10 +660,14 @@ export function cellToChildren(h3Index, res) {
 export function cellToChildrenSize(h3Index, res) {
     refreshViews();
     releaseScratch();
-    if (!isValidCell(h3Index)) {
+    const [lo, hi] = h3IndexToSplitLong(h3Index);
+    // C's cellToChildrenSize only range-checks the resolution, not the
+    // cell: an invalid cell would yield a plausible-looking 7^n (and
+    // cellToChildren would then iterate 7^n garbage children), so the cell
+    // is validated up front.
+    if (!H3.bind__isValidCell(lo, hi)) {
         throw H3LibraryError(E_CELL_INVALID);
     }
-    const [lo, hi] = h3IndexToSplitLong(h3Index);
     const countPtr = alloc(8);
     refreshViews();
     throwIfError(H3.bind__cellToChildrenSize(lo, hi, res, countPtr));

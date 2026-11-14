@@ -18,7 +18,11 @@
  *
  * Documented divergences between h3-js and h3-node (malformed-input
  * handling, unit parsing, error encoding) are covered by the dedicated
- * "divergence" tests below.
+ * "divergence" tests below. One deliberate exception where h3-wasm follows
+ * h3-node rather than h3-js: cellToChildren on an invalid cell throws
+ * E_CELL_INVALID instead of returning [] (h3-js's silent [] hides bad
+ * input, and the redundant pre-validation it implied cost a full extra
+ * round-trip per valid call).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -754,10 +758,13 @@ test('divergence: polygonToCellsExperimental invalid flag', () => {
     );
 });
 
-test('divergence: cellToChildrenSize vs cellToChildren on invalid cell', () => {
-    // h3-js/wasm: cellToChildren returns [] for an invalid cell, while
-    // cellToChildrenSize throws E_CELL_INVALID. h3-node throws in both.
-    assert.deepEqual(h3wasm.cellToChildren('zzz', 10), []);
+test('divergence: cellToChildren* on invalid cell (wasm matches h3-node)', () => {
+    // h3-js returns [] from cellToChildren for an invalid cell (while
+    // cellToChildrenSize throws). h3-wasm and h3-node both throw for
+    // cellToChildren: C's cellToChildren does not validate its input, so the
+    // wrappers reject the cell up front (E_CELL_INVALID in wasm, an
+    // argument-level error in h3-node).
+    assert.equal(expectThrow(h3wasm, 'cellToChildren', ['zzz', 10]).code, 5);
     assert.deepEqual(h3js.cellToChildren('zzz', 10), []);
     assert.equal(
         expectThrow(h3wasm, 'cellToChildrenSize', ['zzz', 10]).code,

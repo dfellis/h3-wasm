@@ -116,9 +116,12 @@ integer arrays `[lower32, upper32]` — exactly like h3-js.
 
 All 58 public functions of h3-js 4.5.0 are implemented, plus the `E_*`
 error-code constants and `H3LibraryError`/`JSBindingError` factories.
-Behavior follows h3-js exactly, including its quirks (e.g. malformed
-index strings parse to cell 0 and let the C library decide;
-`h3IndexToSplitLong` performs no 32-bit range checks).
+Behavior follows h3-js, including its quirks (e.g. malformed index
+strings parse to cell 0 and let the C library decide;
+`h3IndexToSplitLong` performs no 32-bit range checks). One deliberate
+exception: `cellToChildren` on an invalid cell throws `E_CELL_INVALID`
+(like h3-node) rather than returning `[]` (like h3-js) — see
+[Documented divergences](#documented-divergences).
 
 ## Documented divergences
 
@@ -128,6 +131,7 @@ divergence tests in `test/index.test.js`:
 
 | Area | h3-wasm / h3-js | h3-node 4.5.3 |
 | --- | --- | --- |
+| `cellToChildren` on an invalid cell | **wasm throws `E_CELL_INVALID` (5); h3-js returns `[]`** — the one place wasm follows h3-node | throws (argument-level error) |
 | Malformed index strings (`getResolution('zzz')`, `cellToLatLng(null)`, …) | parse to cell 0; C library decides (sentinels like `-1`, or a real result) | throws `EINVAL` (caller error) |
 | TypedArray index input | only plain two-element integer arrays are split longs; anything else parses to cell 0 | accepts a two-element `Uint32Array` as a split long |
 | Unknown units (`'miles'`, `'m2'` where invalid) | throws `E_UNKNOWN_UNIT` (code 1000) | prefix parsing: `unit[0] == 'm'` ⇒ meters (no throw) for `greatCircleDistance`/`getHexagonEdgeLengthAvg`; empty/non-string ⇒ `EINVAL` |
