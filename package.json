@@ -27,7 +27,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+ssh://git@github.com:dfellis/h3-wasm.git"
+    "url": "git+ssh://git@github.com/dfellis/h3-wasm.git"
   },
   "keywords": [
     "h3",

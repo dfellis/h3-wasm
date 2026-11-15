@@ -49,6 +49,10 @@ if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
     fail(`'${version}' is not a valid semver version (e.g. 0.1.0 or 0.1.0-alpha.1)`);
 }
 const tag = `v${version}`;
+// npm refuses to publish a prerelease without an explicit dist-tag; the
+// convention is the first prerelease identifier (0.1.0-alpha.1 -> alpha).
+const prereleaseTag = version.includes('-') ? version.split('-')[1].split('.')[0] : null;
+const publishCmd = `npm publish${prereleaseTag ? ` --tag ${prereleaseTag}` : ''}`;
 
 // --- preconditions --------------------------------------------------------
 if (git('version').error || git('version').status !== 0) fail('git is not available');
@@ -121,7 +125,7 @@ ${tag} is ready locally:
   tag:        ${tag}
 
 Publish by hand (npm requires 2FA):
-  npm publish
+  ${publishCmd}
 
 Then push:
   git push origin ${branch}

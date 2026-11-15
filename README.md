@@ -103,6 +103,10 @@ release is cut entirely from a local checkout — no CI publishing, no tokens:
    npm publish
    ```
 
+   (For a prerelease version npm requires a dist-tag, e.g.
+   `npm publish --tag alpha` for `0.1.0-alpha` — the script prints the
+   command to use.)
+
    The `files` whitelist ships exactly `index.js`, `h3.wasm`, and
    `build/metadata.js` (plus the auto-included `README`/`LICENSE`).
    `prepublishOnly` (`tools/check-artifacts.mjs`) re-checks that the
