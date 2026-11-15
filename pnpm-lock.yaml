@@ -170,8 +170,8 @@ importers:
         specifier: ^4.5.0
         version: 4.5.0
       h3-node:
-        specifier: ^4.5.3
-        version: 4.5.3
+        specifier: ^4.5.5
+        version: 4.5.5
 
 packages:
 
@@ -228,8 +228,8 @@ packages:
     resolution: {integrity: sha512-uKmdPc+DuarnR+XqZxEuWOMw7KzzKROrx3MLeJpFnMOs78S9M5eZ+X5RieS9UcSFQqbeXzbfWuX/W9Pyajinqw==}
     engines: {node: '>=4', npm: '>=3', yarn: '>=1.3.0'}
 
-  h3-node@4.5.3:
-    resolution: {integrity: sha512-9OyB8XeyEqiRoNMQ8PotXgAT61eO7fXGmikGUuxHuU7CF8fjdznACw+gnBYI1CW8Rsq6OCg1Bv3h3tDe/huwqg==}
+  h3-node@4.5.5:
+    resolution: {integrity: sha512-HVAH4KYsSj8n17sNVWulGvvR3Xk+BP6w1qyset7OAE9fB56H3wA5bzPukw7OXrzU2ZfKwQhrmafNX1Q6brSTfA==}
 
   ieee754@1.2.1:
     resolution: {integrity: sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA==}
@@ -391,7 +391,7 @@ snapshots:
 
   h3-js@4.5.0: {}
 
-  h3-node@4.5.3:
+  h3-node@4.5.5:
     dependencies:
       node-gyp: 13.1.0
       node-gyp-build: 4.8.4

@@ -1,5 +1,5 @@
 minimumReleaseAgeExclude:
-  - h3-node@4.5.3
+  - h3-node@4.5.5
 
 # pnpm (>= 11) blocks dependency install scripts by default and fails the
 # install unless each build-capable package is ruled on in allowBuilds.

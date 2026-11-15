@@ -9,8 +9,9 @@
  * order is not part of the contract (polygonToCells). h3-node (the N-API
  * build of the same H3 4.5.0 C library) is a parity check: on valid
  * inputs it must produce the same value, and whenever wasm throws it must
- * throw too (its error code encoding differs: numeric strings for generic
- * C errors, 'EINVAL' for special cases).
+ * throw too. Since 4.5.4 it uses the same numeric error codes as h3-js,
+ * differing only where its binding pre-validates an argument before the C
+ * call (see the "error codes match h3-js" test).
  *
  * When all three throw for the same input (e.g. pentagon distortion in
  * gridRingUnsafe), the wasm/h3-js error codes must be equal — same C code
@@ -164,13 +165,12 @@ function run(fn) {
 }
 
 // nodeMode / nodeSanitize allow a per-test relaxation of the h3-node
-// parity check where h3-node 4.5.3 legitimately differs from h3-js (the
+// parity check where h3-node legitimately differs from h3-js (the
 // divergence tests document each case):
 //  - h3-node runs H3's C degsToRads/radsToDegs (deg * (M_PI / 180.0)),
 //    which differs from h3-js's pure-JS (deg * Math.PI) / 180 by 1 ulp;
-//  - the h3-node 4.5.3 prebuild's getIcosahedronFaces sizes its result
-//    to maxFaceCount and leaves holes for unused slots (fixed upstream
-//    after v4.5.3), so holes are filtered out before comparing.
+//  - (4.5.3 prebuilds also left holes in getIcosahedronFaces results;
+//    fixed in 4.5.4, so no sanitizing is needed today.)
 function compare3(name, args, mode, nodeMode, nodeSanitize) {
     const where = `${name}(${JSON.stringify(args)})`;
     const w = run(() => h3wasm[name](...args));
@@ -608,35 +608,42 @@ test('error codes match h3-js', () => {
     const disk2 = h3wasm.gridDisk(cell, 2);
     const far = disk2[disk2.length - 1];
     const cases = [
-        // [name, args, expected code]
+        // [name, args, expected code, h3-node code (defaults to the same)]
         ['latLngToCell', [NaN, 0, 9], 3], // E_LATLNG_DOMAIN
         ['latLngToCell', [0, 0, 16], 4], // E_RES_DOMAIN
         ['cellToParent', [cell, 16], 4], // E_RES_DOMAIN
         ['getHexagonAreaAvg', [16, 'm2'], 4], // E_RES_DOMAIN
-        ['cellToChildrenSize', ['zzz', 10], 5], // E_CELL_INVALID
+        ['cellToChildrenSize', ['zzz', 10], 5, 1], // node pre-checks isValidCell -> E_FAILED
         ['compactCells', [['992830828a3ffff']], 5], // E_CELL_INVALID (reserved bits set)
         ['cellsToDirectedEdge', [cell, far], 11], // E_NOT_NEIGHBORS
         ['gridDistance', [cell, parent8], 12], // E_RES_MISMATCH
-        ['constructCell', [191, [1, 2, 3], 2], 18], // E_DIGIT_DOMAIN (length != res)
-        ['constructCell', [191, new Array(16).fill(1), 16], 18], // E_DIGIT_DOMAIN (> 15 digits)
+        ['constructCell', [191, [1, 2, 3], 2], 18, 2], // node checks digit count -> E_DOMAIN
+        ['constructCell', [191, new Array(16).fill(1), 16], 18, 4], // node checks res -> E_RES_DOMAIN
         ['gridDisk', [cell, -1], 2], // E_DOMAIN
         ['cellToVertex', [cell, 7], 2], // E_DOMAIN
         ['cellArea', [cell, 'miles'], 1000], // E_UNKNOWN_UNIT
         ['edgeLength', [cell + '8', 'miles'], 1000], // E_UNKNOWN_UNIT
         ['polygonToCellsExperimental', [SF_RING, 6, 'bogus'], 15], // E_OPTION_INVALID
     ];
-    for (const [name, args, code] of cases) {
+    // h3-node 4.5.4+ attaches the same numeric codes as h3-js/wasm; it only
+    // differs where its binding pre-validates an argument before the C call
+    // (the nodeCode column).
+    for (const [name, args, code, nodeCode] of cases) {
         const we = expectThrow(h3wasm, name, args);
         const je = expectThrow(h3js, name, args);
         assert.equal(we.code, code, `wasm ${name} error code`);
         assert.equal(je.code, code, `h3-js ${name} error code`);
-        expectThrow(h3node, name, args); // h3-node throws too (own code encoding)
+        assert.equal(
+            expectThrow(h3node, name, args).code,
+            nodeCode ?? code,
+            `h3-node ${name} error code`
+        );
     }
 
-    // Unit errors where h3-node 4.5.3 does NOT throw: it parses units by
-    // prefix (unit[0] == 'm' ⇒ meters), so 'm2' and 'miles' are silently
-    // treated as meters. wasm/h3-js reject them with E_UNKNOWN_UNIT. The
-    // greatCircleDistance case is pinned in the dedicated divergence test.
+    // Unknown units: all three exact-match (4.5.4+ h3-js/wasm/h3-node all
+    // reject 'm2' and 'miles' with E_UNKNOWN_UNIT; 4.5.3 h3-node used to
+    // prefix-match them to meters). The greatCircleDistance cases are
+    // pinned in the dedicated divergence test.
     assert.equal(
         expectThrow(h3wasm, 'getHexagonEdgeLengthAvg', [9, 'm2']).code,
         1000,
@@ -647,12 +654,10 @@ test('error codes match h3-js', () => {
         1000,
         'h3-js E_UNKNOWN_UNIT'
     );
-    assert.ok(
-        almostEqual(
-            h3node.getHexagonEdgeLengthAvg(9, 'm2'),
-            h3node.getHexagonEdgeLengthAvg(9, 'm')
-        ),
-        'h3-node treats "m2" as meters'
+    assert.equal(
+        expectThrow(h3node, 'getHexagonEdgeLengthAvg', [9, 'm2']).code,
+        1000,
+        'h3-node E_UNKNOWN_UNIT'
     );
     assert.equal(
         expectThrow(h3wasm, 'greatCircleDistance', [[0, 0], [1, 1], 'miles']).code,
@@ -675,7 +680,7 @@ test('localIjToCell validates coords object', () => {
     assert.equal(we.code, undefined, 'plain Error, no code');
     assert.equal(je.code, undefined, 'plain Error, no code');
     const ne = expectThrow(h3node, 'localIjToCell', [origin, 'nope']);
-    assert.equal(ne.code, 'EINVAL', 'h3-node reports EINVAL');
+    assert.equal(ne.code, 2, 'h3-node reports E_DOMAIN (4.5.4+ numeric codes)');
 });
 
 // ---------------------------------------------------------------------------
@@ -724,37 +729,37 @@ test('divergence: malformed index strings (sentinels vs throws)', () => {
 });
 
 test('divergence: greatCircleDistance unknown unit', () => {
+    // String units: all three exact-match — 'miles' and '' are rejected
+    // with E_UNKNOWN_UNIT (4.5.3 h3-node used to treat unknown non-empty
+    // strings as meters, and '' as EINVAL).
     const we = expectThrow(h3wasm, 'greatCircleDistance', [[0, 0], [1, 1], 'miles']);
     const je = expectThrow(h3js, 'greatCircleDistance', [[0, 0], [1, 1], 'miles']);
+    const ne = expectThrow(h3node, 'greatCircleDistance', [[0, 0], [1, 1], 'miles']);
     assert.equal(we.code, 1000, 'wasm E_UNKNOWN_UNIT');
     assert.equal(je.code, 1000, 'h3-js E_UNKNOWN_UNIT');
-    // h3-node treats any unknown non-empty string unit as meters
-    const nodeMiles = h3node.greatCircleDistance([0, 0], [1, 1], 'miles');
-    assert.equal(nodeMiles, h3node.greatCircleDistance([0, 0], [1, 1], 'm'));
-    assert.ok(
-        almostEqual(nodeMiles, h3wasm.greatCircleDistance([0, 0], [1, 1], 'm')),
-        'node "miles" == wasm meters'
-    );
-    // h3-node throws EINVAL for empty / non-string units
+    assert.equal(ne.code, 1000, 'h3-node E_UNKNOWN_UNIT');
     assert.equal(
         expectThrow(h3node, 'greatCircleDistance', [[0, 0], [1, 1], '']).code,
-        'EINVAL'
+        1000,
+        'h3-node empty unit E_UNKNOWN_UNIT'
+    );
+    // Non-string unit: the one remaining difference — h3-js/wasm report
+    // E_UNKNOWN_UNIT (the C unit compare fails), h3-node reports E_DOMAIN
+    // (its N-API string extraction fails before the C call).
+    assert.equal(
+        expectThrow(h3wasm, 'greatCircleDistance', [[0, 0], [1, 1], 5]).code,
+        1000,
+        'wasm non-string unit'
+    );
+    assert.equal(
+        expectThrow(h3js, 'greatCircleDistance', [[0, 0], [1, 1], 5]).code,
+        1000,
+        'h3-js non-string unit'
     );
     assert.equal(
         expectThrow(h3node, 'greatCircleDistance', [[0, 0], [1, 1], 5]).code,
-        'EINVAL'
-    );
-});
-
-test('divergence: polygonToCellsExperimental invalid flag', () => {
-    const we = expectThrow(h3wasm, 'polygonToCellsExperimental', [SF_RING, 6, 'bogus']);
-    const je = expectThrow(h3js, 'polygonToCellsExperimental', [SF_RING, 6, 'bogus']);
-    assert.equal(we.code, 15, 'wasm E_OPTION_INVALID');
-    assert.equal(je.code, 15, 'h3-js E_OPTION_INVALID');
-    assert.equal(
-        expectThrow(h3node, 'polygonToCellsExperimental', [SF_RING, 6, 'bogus']).code,
-        'EINVAL',
-        'h3-node reports EINVAL'
+        2,
+        'h3-node non-string unit is E_DOMAIN'
     );
 });
 
@@ -762,8 +767,10 @@ test('divergence: cellToChildren* on invalid cell (wasm matches h3-node)', () =>
     // h3-js returns [] from cellToChildren for an invalid cell (while
     // cellToChildrenSize throws). h3-wasm and h3-node both throw for
     // cellToChildren: C's cellToChildren does not validate its input, so the
-    // wrappers reject the cell up front (E_CELL_INVALID in wasm, an
-    // argument-level error in h3-node).
+    // wrappers reject the cell up front. Codes differ: wasm throws C's
+    // E_CELL_INVALID (5); h3-node 4.5.4+ pre-checks isValidCell in its
+    // binding and throws E_FAILED (1) (the code is pinned in the error-codes
+    // test via the nodeCode column).
     assert.equal(expectThrow(h3wasm, 'cellToChildren', ['zzz', 10]).code, 5);
     assert.deepEqual(h3js.cellToChildren('zzz', 10), []);
     assert.equal(
@@ -771,8 +778,8 @@ test('divergence: cellToChildren* on invalid cell (wasm matches h3-node)', () =>
         5
     );
     assert.equal(expectThrow(h3js, 'cellToChildrenSize', ['zzz', 10]).code, 5);
-    expectThrow(h3node, 'cellToChildren', ['zzz', 10]);
-    expectThrow(h3node, 'cellToChildrenSize', ['zzz', 10]);
+    assert.equal(expectThrow(h3node, 'cellToChildren', ['zzz', 10]).code, 1);
+    assert.equal(expectThrow(h3node, 'cellToChildrenSize', ['zzz', 10]).code, 1);
 });
 
 test('divergence: h3-node accepts Uint32Array split longs', () => {
@@ -795,18 +802,15 @@ test('divergence: h3-node accepts Uint32Array split longs', () => {
     );
 });
 
-test('divergence: h3-node 4.5.3 getIcosahedronFaces leaves array holes', () => {
-    // The h3-node 4.5.3 prebuild sizes the result to maxFaceCount and
-    // skips unused slots, leaving holes (e.g. [7, <hole>] for a hexagon
-    // on one face); fixed upstream after v4.5.3 (variable array + dense
-    // packing). wasm/h3-js return a dense array.
+test('h3-node 4.5.4+ getIcosahedronFaces returns a dense array', () => {
+    // The h3-node 4.5.3 prebuild sized the result to maxFaceCount and left
+    // holes for unused slots (e.g. [7, <hole>] for a hexagon on one face);
+    // 4.5.4+ returns a dense array like wasm/h3-js. Pinned so the parity is
+    // noticed if a prebuild ever regresses.
     const cell = '8928342e20fffff'; // hexagon on a single icosahedron face
     assert.deepEqual(h3wasm.getIcosahedronFaces(cell), [7]);
     assert.deepEqual(h3js.getIcosahedronFaces(cell), [7]);
-    const n = h3node.getIcosahedronFaces(cell);
-    assert.deepEqual(n.filter((x) => x != null), [7], 'h3-node faces, dense view');
-    assert.equal(n.length, 2, 'h3-node array sized to maxFaceCount');
-    assert.equal('1' in n, false, 'unused slot is a hole');
+    assert.deepEqual(h3node.getIcosahedronFaces(cell), [7], 'h3-node dense, no holes');
 });
 
 // ---------------------------------------------------------------------------
