@@ -26,7 +26,7 @@ const DEP_GRAPH = {
     'h3.wasm': [
         'build/support.a',
         'h3.zig',
-        'mathimpl.c',
+        'mathcompat.c',
         'cvar.c',
         'Makefile',
         ...listDir('cshim'),

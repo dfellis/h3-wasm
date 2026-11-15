@@ -70,6 +70,64 @@ const CoordIJ = extern struct {
 const H3Index = u64;
 const H3Error = u32;
 
+// ---------------------------------------------------------------------------
+// Host libm
+// ---------------------------------------------------------------------------
+//
+// wasm32-freestanding has no math library. Instead of shipping a software
+// Taylor-series implementation (measured 2-9x slower than the host
+// intrinsics, worst on inverse trig: atan2 50 ns vs 7 ns, asin/acos 66 ns
+// vs 7 ns), the C transcendentals are forwarded to the env namespace, where
+// index.js provides the host Math.* builtins. This is the same strategy
+// emscripten uses in its JS libm shim for the h3-js asm.js build, and makes
+// trig-heavy results match h3-js bit-for-bit. The C-named wrappers exist so
+// the C objects' undefined symbols link against a definition (a plain
+// `extern "env"` is a namespaced import and cannot resolve them); LLVM
+// inlines the wrapper, so the only extra work per call is the env import
+// itself. The trivial round/lround/fmin/fmax (no exact Math.* counterpart)
+// live in mathcompat.c.
+extern "env" fn js_sin(x: f64) f64;
+extern "env" fn js_cos(x: f64) f64;
+extern "env" fn js_tan(x: f64) f64;
+extern "env" fn js_atan(x: f64) f64;
+extern "env" fn js_atan2(y: f64, x: f64) f64;
+extern "env" fn js_asin(x: f64) f64;
+extern "env" fn js_acos(x: f64) f64;
+extern "env" fn js_sqrt(x: f64) f64;
+extern "env" fn js_floor(x: f64) f64;
+extern "env" fn js_ceil(x: f64) f64;
+
+export fn sin(x: f64) f64 {
+    return js_sin(x);
+}
+export fn cos(x: f64) f64 {
+    return js_cos(x);
+}
+export fn tan(x: f64) f64 {
+    return js_tan(x);
+}
+export fn atan(x: f64) f64 {
+    return js_atan(x);
+}
+export fn atan2(y: f64, x: f64) f64 {
+    return js_atan2(y, x);
+}
+export fn asin(x: f64) f64 {
+    return js_asin(x);
+}
+export fn acos(x: f64) f64 {
+    return js_acos(x);
+}
+export fn sqrt(x: f64) f64 {
+    return js_sqrt(x);
+}
+export fn floor(x: f64) f64 {
+    return js_floor(x);
+}
+export fn ceil(x: f64) f64 {
+    return js_ceil(x);
+}
+
 extern fn isValidCell(h: H3Index) c_int;
 extern fn isValidIndex(h: H3Index) c_int;
 extern fn isPentagon(h: H3Index) c_int;
@@ -591,4 +649,50 @@ export fn bind__cellToVertexes(lo: i32, hi: i32, out: i32) u32 {
 
 export fn bind__vertexToLatLng(lo: i32, hi: i32, out: i32) u32 {
     return vertexToLatLng(idx(lo, hi), optptr(LatLng, out));
+}
+
+// ---------------------------------------------------------------------------
+// JS glue helpers
+// ---------------------------------------------------------------------------
+
+/// Parse an H3 index hex string into a 64-bit index, written as
+/// little-endian 32-bit halves (lower first) at `out`. Mirrors h3-js's
+/// h3IndexToSplitLong: the lower half is the last 8 characters; the upper
+/// half is everything before that, accumulated mod 2^32 (matching the i32
+/// coercion the emscripten glue applies to h3-js's longer parseInt result).
+/// Any non-hex character writes 0, the "no value" sentinel h3-js produces
+/// as [0, 0] on its regex failure.
+///
+/// The caller (index.js) guarantees ASCII-only input and len >= 9: strings
+/// of 8 characters or fewer yield upper === parseInt('') === NaN in h3-js,
+/// a value that does not fit in a u32, so that case is handled in JS.
+export fn bind__h3IndexFromString(ptr: i32, len: i32, out: i32) void {
+    const bytes = @as([*]const u8, @ptrFromInt(@as(usize, @intCast(ptr))))[0..@as(usize, @intCast(len))];
+    const upperEnd: usize = bytes.len - 8;
+    var upper: u32 = 0;
+    var lower: u32 = 0;
+    var ok = true;
+    var i: usize = 0;
+    while (i < bytes.len) : (i += 1) {
+        const c = bytes[i];
+        const v: u32 = if (c >= '0' and c <= '9')
+            c - '0'
+        else if (c >= 'a' and c <= 'f')
+            c - 'a' + 10
+        else if (c >= 'A' and c <= 'F')
+            c - 'A' + 10
+        else {
+            ok = false;
+            break;
+        };
+        if (i < upperEnd) {
+            upper = upper * 16 + v;
+        } else {
+            lower = lower * 16 + v;
+        }
+    }
+    const val: u64 = if (ok) (@as(u64, upper) << 32) | @as(u64, lower) else 0;
+    const outPtr = @as([*]u32, @ptrFromInt(@as(usize, @intCast(out))));
+    outPtr[0] = @truncate(val);
+    outPtr[1] = @truncate(val >> 32);
 }

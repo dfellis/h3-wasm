@@ -7,8 +7,11 @@
 #      archive. It is a separate Zig module because exported functions in
 #      files merely transitively imported by the root module get DCE'd.
 #   2. h3.wasm - the final shared object: support.a + h3 C sources +
-#      C-implemented libm (mathimpl.c) + C varargs (cvar.c), with h3.zig as
-#      the Zig root providing the bind__* wasm exports.
+#      C varargs (cvar.c) + mathcompat.c (round/lround/fmin/fmax), with
+#      h3.zig as the Zig root providing the bind__* wasm exports. The C
+#      transcendentals (sin/cos/atan2/...) are imported from the host env
+#      namespace, where index.js provides the Math.* builtins - there is
+#      no software libm in the build.
 #
 # NOTE: `zig build` (build.zig) is intentionally not used: the 0.16 build
 # system turns the (harmless) LLD dylib stderr warning into a hard error via
@@ -37,13 +40,13 @@ build:
 build/support.a: support.zig Makefile | build
 	$(ZIG) build-lib support.zig $(ZIGFLAGS) -static -femit-bin=build/support.a --name support
 
-h3.wasm: build/support.a h3.zig $(H3_C_SRCS) mathimpl.c cvar.c $(wildcard cshim/*) Makefile
+h3.wasm: build/support.a h3.zig $(H3_C_SRCS) mathcompat.c cvar.c $(wildcard cshim/*) Makefile
 	# NOTE: Zig 0.16 CLI quirk: per-module options (-target/-mcpu/-O/...)
 	# must come BEFORE -Mroot=; options after -Mroot= are silently dropped
 	# and the build defaults to the native target (symptom: "not an ELF
 	# file" when the wasm archive is fed to the ELF linker).
 	-@rm -f h3.wasm
-	$(ZIG) build-lib $(ZIGFLAGS) -dynamic build/support.a mathimpl.c cvar.c $(H3_C_SRCS) \
+	$(ZIG) build-lib $(ZIGFLAGS) -dynamic build/support.a mathcompat.c cvar.c $(H3_C_SRCS) \
 		-Mroot=h3.zig \
 		-I cshim -I h3/src/h3lib/include \
 		-femit-bin=h3.wasm --name h3

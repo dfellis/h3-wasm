@@ -1,6 +1,7 @@
 /* math.h shim for wasm32-freestanding builds.
- * WebAssembly has no hardware trig/sqrt, so the implementations live in
- * mathimpl.c (compiled with the same target). */
+ * The transcendentals (sin/cos/tan/atan/atan2/asin/acos/sqrt/floor/ceil)
+ * are imported from the host env namespace (see h3.zig); the remaining
+ * trivial functions (round/lround/llround/fmin/fmax) live in mathcompat.c. */
 #ifndef SHIM_MATH_H
 #define SHIM_MATH_H
 

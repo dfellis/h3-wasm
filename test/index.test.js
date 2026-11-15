@@ -814,8 +814,19 @@ test('divergence: h3-node 4.5.3 getIcosahedronFaces leaves array holes', () => {
 // ---------------------------------------------------------------------------
 
 const BENCH_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'build', 'benchmark.txt');
-const LIGHT_ITERS = 1000;
+// Steady-state measurement: enough iterations that each (lib, function)
+// pair is deep in Turbofan territory (V8 tiers opt-compiled code around
+// ~100k total calls; the correctness tests above contribute to that count
+// too), and a dedicated warmup loop so the measured loop runs on already
+// tiered code. The old 1000-iter / 25-warmup regime measured whatever JIT
+// tier the preceding tests happened to leave the callee at.
+const LIGHT_ITERS = 50000;
 const HEAVY_ITERS = 500;
+const WARMUP_ITERS = 5000;
+// A bounded set of arg sets, cycled by the warmup and measured loops.
+// The functions are pure, so cycling does not skew the result; it just
+// keeps the arg-generation cost (randomCell etc.) off the critical path.
+const MAX_ARG_SETS = 500;
 
 const benchmarkCases = [
     ['latLngToCell', 'latLngToCell', () => [randLat(), randLng(), 9], LIGHT_ITERS],
@@ -988,30 +999,60 @@ test('benchmarks (3-way) -> build/benchmark.txt', { timeout: 600000 }, () => {
     const lines = [];
     lines.push('# h3-wasm 3-way benchmark');
     lines.push(`# node ${process.version} on ${process.platform}/${process.arch}`);
-    lines.push(`# light=${LIGHT_ITERS} iters, heavy=${HEAVY_ITERS} iters, 25-iter warmup per case`);
+    lines.push(
+        `# light=${LIGHT_ITERS} iters, heavy=${HEAVY_ITERS} iters, ${WARMUP_ITERS}-iter warmup per case, ${MAX_ARG_SETS} arg sets cycled (steady-state Turbofan)`
+    );
     lines.push('');
 
     for (const [label, fnName, genArgs, iters] of benchmarkCases) {
-        const runs = [];
-        for (let i = 0; i < iters; i++) {
+        const nRuns = Math.min(iters, MAX_ARG_SETS);
+        let runs = [];
+        for (let i = 0; i < nRuns; i++) {
             runs.push(genArgs());
         }
+        // Some arg sets legitimately throw (e.g. gridRingUnsafe rings that
+        // cross a pentagon). All three libraries run the same C, so
+        // throwing behavior is identical across them; verify once with
+        // h3-wasm and drop the throwing sets so the measured loop can run
+        // unguarded (an empty catch per iteration is not free).
+        const verify = h3wasm[fnName];
+        const safe = [];
+        for (const args of runs) {
+            try {
+                verify(...args);
+                safe.push(args);
+            } catch {}
+        }
+        if (safe.length > 0) {
+            runs = safe;
+        }
+        const guarded = runs.length === nRuns && safe.length === 0;
+        const warmup = Math.min(WARMUP_ITERS, iters * 2);
         const times = {};
         for (const [libName, lib] of [
             ['h3-wasm', h3wasm],
             ['h3-js', h3js],
             ['h3-node', h3node],
         ]) {
-            for (let i = 0; i < 25; i++) {
+            // Hoist the property lookup out of the loops.
+            const f = lib[fnName];
+            // Warmup: tier the callee before measuring.
+            for (let i = 0; i < warmup; i++) {
                 try {
-                    lib[fnName](...runs[i]);
+                    f(...runs[i % runs.length]);
                 } catch {}
             }
             const start = process.hrtime.bigint();
-            for (let i = 0; i < iters; i++) {
-                try {
-                    lib[fnName](...runs[i]);
-                } catch {}
+            if (guarded) {
+                for (let i = 0; i < iters; i++) {
+                    try {
+                        f(...runs[i % runs.length]);
+                    } catch {}
+                }
+            } else {
+                for (let i = 0; i < iters; i++) {
+                    f(...runs[i % runs.length]);
+                }
             }
             times[libName] = Number(process.hrtime.bigint() - start);
         }

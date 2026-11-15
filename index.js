@@ -59,6 +59,20 @@ const { instance } = await WebAssembly.instantiate(wasmBytes, {
         __stack_pointer: new WebAssembly.Global({ value: 'i32', mutable: true }, memory.buffer.byteLength),
         __memory_base: new WebAssembly.Global({ value: 'i32' }, 0),
         __table_base: new WebAssembly.Global({ value: 'i32' }, 0),
+        // Host libm: the C code's transcendental calls are wrapped by
+        // C-named exports in h3.zig that forward to these imports. A
+        // software libm in wasm measured 2-9x slower than these builtins;
+        // emscripten does the same via its JS libm shim.
+        js_sin: Math.sin,
+        js_cos: Math.cos,
+        js_tan: Math.tan,
+        js_atan: Math.atan,
+        js_atan2: Math.atan2,
+        js_asin: Math.asin,
+        js_acos: Math.acos,
+        js_sqrt: Math.sqrt,
+        js_floor: Math.floor,
+        js_ceil: Math.ceil,
     },
 });
 
@@ -72,10 +86,11 @@ H3.__wasm_apply_data_relocs();
 // memory.grow() detaches the ArrayBuffer, so re-wrap typed views whenever
 // the buffer identity changes (checked after every wasm call).
 let lastBuffer = null;
-let u32, f64;
+let u8, u32, f64;
 function refreshViews() {
     if (memory.buffer !== lastBuffer) {
         lastBuffer = memory.buffer;
+        u8 = new Uint8Array(lastBuffer);
         u32 = new Uint32Array(lastBuffer);
         f64 = new Float64Array(lastBuffer);
     }
@@ -95,10 +110,18 @@ const INITIAL_TOP = memory.buffer.byteLength;
 // region is recycled at the start of every public function. Without this,
 // long-running consumers would exhaust the JS-owned region.
 const SCRATCH_BASE = (dataEnd + 15) & ~15;
-let nextFree = SCRATCH_BASE;
+// Fixed slots reserved at the head of the bump region: an input-string
+// buffer for bind__h3IndexFromString and its 8-byte parsed output. They
+// hold no per-call state (transient input only), so releaseScratch() never
+// recycles them.
+const STRING_MAX_LEN = 248;
+const STRING_SCRATCH = SCRATCH_BASE;
+const STRING_OUT = SCRATCH_BASE + STRING_MAX_LEN;
+const BUMP_BASE = SCRATCH_BASE + STRING_MAX_LEN + 8; // 256, 16-aligned
+let nextFree = BUMP_BASE;
 
 function releaseScratch() {
-    nextFree = SCRATCH_BASE;
+    nextFree = BUMP_BASE;
 }
 
 function alloc(bytes) {
@@ -235,7 +258,6 @@ const BASE_16 = 16;
 const INVALID_HEXIDECIMAL_CHAR = /[^0-9a-fA-F]/;
 
 export function h3IndexToSplitLong(h3Index) {
-    refreshViews();
     // NOTE: no releaseScratch() here — this helper runs inside public
     // functions (storeH3Index, etc.) while their scratch is still live.
     // Mirror h3-js exactly: a two-element integer array passes through
@@ -250,16 +272,47 @@ export function h3IndexToSplitLong(h3Index) {
     ) {
         return h3Index;
     }
-    if (typeof h3Index !== 'string' || INVALID_HEXIDECIMAL_CHAR.test(h3Index)) {
+    if (typeof h3Index !== 'string') {
         return [0, 0];
     }
-    const upper = parseInt(h3Index.substring(0, h3Index.length - 8), BASE_16);
-    const lower = parseInt(h3Index.substring(h3Index.length - 8), BASE_16);
-    return [lower, upper];
+    // Strings of 8 hex digits or fewer have an empty upper part: h3-js
+    // yields parseInt('') === NaN there, which does not fit in a u32, so
+    // keep that case in JS.
+    if (h3Index.length <= 8) {
+        return [parseInt(h3Index, BASE_16), NaN];
+    }
+    if (h3Index.length > STRING_MAX_LEN) {
+        // Pathological length: legacy JS parse, bit-identical to h3-js.
+        if (INVALID_HEXIDECIMAL_CHAR.test(h3Index)) {
+            return [0, 0];
+        }
+        return [
+            parseInt(h3Index.substring(h3Index.length - 8), BASE_16),
+            parseInt(h3Index.substring(0, h3Index.length - 8), BASE_16),
+        ];
+    }
+    // String parse in wasm: copy the ASCII bytes into the reserved slot
+    // and let the Zig parser do validation and hex->u64 (a 15-char parse
+    // costs a few ns there, versus ~50 ns of regex/substring/parseInt
+    // here). Non-ASCII input can never match h3-js's hex regex, so bail.
+    refreshViews();
+    let i = 0;
+    for (; i < h3Index.length; i++) {
+        const cc = h3Index.charCodeAt(i);
+        if (cc >= 0x80) break;
+        u8[STRING_SCRATCH + i] = cc;
+    }
+    if (i < h3Index.length) {
+        return [0, 0];
+    }
+    // bind__h3IndexFromString allocates nothing (no C call, no Zig heap),
+    // so the buffer cannot detach and no view refresh is needed before
+    // reading the result.
+    H3.bind__h3IndexFromString(STRING_SCRATCH, h3Index.length, STRING_OUT);
+    return [u32[STRING_OUT >> 2], u32[(STRING_OUT >> 2) + 1]];
 }
 
 export function splitLongToH3Index(lower, upper) {
-    refreshViews();
     // `>>> 0` reinterprets each half as unsigned, so a half with the top bit
     // set — which arrives as a negative signed i32 from numberToSplitLong or a
     // wasm i32 export — still formats as its 8 hex digits. The upper half is
@@ -282,13 +335,16 @@ function numberToSplitLong(num) {
     return [num | 0, (num / UPPER_BIT_DIVISOR) | 0];
 }
 
+// Pure-JS helpers below deliberately do NOT call refreshViews(): they never
+// touch wasm memory, so a stale view cannot affect them. Callers that read
+// or write views refresh their own (each public function does at entry and
+// after every wasm call).
+
 export function degsToRads(deg) {
-    refreshViews();
     return (deg * Math.PI) / 180;
 }
 
 export function radsToDegs(rad) {
-    refreshViews();
     return (rad * 180) / Math.PI;
 }
 
