@@ -22,6 +22,7 @@
   "scripts": {
     "build": "make",
     "test": "node --test \"test/*.test.js\"",
+    "release": "node tools/release.mjs",
     "prepublishOnly": "node tools/check-artifacts.mjs"
   },
   "repository": {

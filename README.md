@@ -83,27 +83,45 @@ against **both** `h3-js` and `h3-node` on every function:
 
 ## Releasing
 
-Releases are cut from tags by `.github/workflows/release.yml` (triggered on a
-`v*` tag, or manually from the Actions tab). The job builds `h3.wasm` once
-(host-independent), runs the full test suite, then:
+Unlike h3-node's native prebuilds, `h3.wasm` is host-independent, so a
+release is cut entirely from a local checkout — no CI publishing, no tokens:
 
-- creates a **GitHub release** with the raw `h3.wasm` + `build/metadata.js`
-  attached (for hand-instantiating the wasm without the package), and
-- publishes the **npm package** — the `files` whitelist in `package.json`
-  ships exactly `index.js`, `h3.wasm`, and `build/metadata.js` (plus the
-  auto-included `README`/`LICENSE`).
+1. Run the release script with the next version. It verifies the built
+   `h3.wasm` / `build/metadata.js` are current (rebuilding with `make` if
+   not — that step needs the `./h3/` checkout and Zig 0.16.0), runs the
+   test suite, bumps `version` in `package.json`, commits, and tags that
+   commit `v<version>`:
 
-To cut a release:
+   ```sh
+   node tools/release.mjs 0.1.0
+   ```
 
-1. Bump `version` in `package.json` (e.g. `0.1.0`).
-2. Commit and merge to `main`, then tag: `git tag v0.1.0 && git push origin v0.1.0`.
-3. The workflow verifies the tag matches the version, builds, tests, and
-   publishes to npm + GitHub.
+2. Publish by hand — `npm publish` requires 2FA, so it is the one step that
+   must be done interactively:
 
-The workflow needs an `NPM_TOKEN` repository secret (an npm publishing token
-with access to the `h3-wasm` package). A local `pnpm publish` is guarded by
-`prepublishOnly` (`tools/check-artifacts.mjs`), which refuses to pack if the
-built `h3.wasm` / `build/metadata.js` are missing.
+   ```sh
+   npm publish
+   ```
+
+   The `files` whitelist ships exactly `index.js`, `h3.wasm`, and
+   `build/metadata.js` (plus the auto-included `README`/`LICENSE`).
+   `prepublishOnly` (`tools/check-artifacts.mjs`) re-checks that the
+   artifacts exist and are current, so a publish that skips the script
+   still cannot ship a missing or stale wasm.
+
+3. Push the release commit and tag once the publish succeeded:
+
+   ```sh
+   git push origin main
+   git push origin v0.1.0
+   ```
+
+Optionally, attach the raw `h3.wasm` + `build/metadata.js` to a GitHub
+release (for hand-instantiating the wasm without the package):
+
+```sh
+gh release create v0.1.0 h3.wasm build/metadata.js
+```
 
 ## Usage
 
@@ -254,7 +272,7 @@ mathimpl.c      C libm for wasm32-freestanding
 cvar.c          C varargs support
 cshim/          hand-written C headers (math.h, …) for the freestanding build
 Makefile        2-stage build (support.a → h3.wasm) + metadata generation
-tools/          build helpers (metadata generator) + publish guard
+tools/          build helpers (metadata generator) + publish guard + release script
 test/           node:test suite (3-way comparison vs h3-js and h3-node)
 h3/             H3 v4.5.0 C library (gitignored; clone it yourself)
 h3-js/ h3-node/ reference checkouts (gitignored; not required to build)
