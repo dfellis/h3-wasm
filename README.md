@@ -251,6 +251,8 @@ The cost of h3-wasm's per-call overhead (wasm invocation + argument
 marshalling) is the payoff: one host-independent `h3.wasm` runs in Node,
 browsers, Deno, and Bun with no native build or per-platform prebuilds.
 
+| Function | h3-wasm | h3-js | h3-node |
+| --- | ---: | ---: | ---: |
 | latLngToCell | 678.2 ns | 826.7 ns | **320.8 ns** |
 | cellToLatLng | **334.7 ns** | 351.2 ns | 405.9 ns |
 | cellToBoundary | **774.5 ns** | 938.7 ns | 1761 ns |
