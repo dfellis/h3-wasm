@@ -174,6 +174,16 @@ integer arrays `[lower32, upper32]` — exactly like h3-js.
   h3-js's `h3IndexToSplitLong` semantics exactly, including edge cases
   (non-hex input ⇒ cell 0; 8-char-or-shorter strings keep their `NaN` upper
   half in JS; 248+ char strings fall back to the legacy JS parse).
+- **Stringification in Zig** — array outputs of three or more cells
+  (`cellToChildren`, `gridDisk`, `getRes0Cells`, …) are stringified in
+  `bind__h3IndexArrayToStrings` in `h3.zig`: each 64-bit index becomes one
+  17-byte slot — a length byte plus up to 16 lowercase hex chars (upper 32
+  bits unpadded, lower 32 bits zero-padded to 8; 16 is a hard maximum, so
+  no fallback path is needed). JS then reads the whole block with one
+  `TextDecoder.decode` and one `slice` per cell, replacing ~150 ns of JS
+  `toString(16)`/`padStart` work per cell with a few ns (`getRes0Cells`:
+  18.6 µs → ~3.1 µs). Outputs below three cells and polygons too large for
+  the bump region keep the legacy JS path.
 - **Binding surface** — `h3.zig` declares the H3 C API and re-exports it as
   `bind__*` wasm exports (the prefix avoids symbol collisions with the C
   library at link time).
@@ -218,14 +228,15 @@ Turbofan) are from **Node 24 on x86-64 Linux**; the relative pattern holds
 on other platforms. Fastest per row is bolded. Expect a few percent
 run-to-run variance (occasionally ~30% on a single row).
 
-- **h3-node** (a compiled N-API binding) is fastest on 29 of 52 functions
+- **h3-node** (a compiled N-API binding) is fastest on 23 of 52 functions
   and is the performance bar.
-- **h3-wasm** is fastest outright on 11 of 52 (e.g. `cellToBoundary`,
-  `cellsToMultiPolygon`, `greatCircleDistance`, `splitLongToH3Index`),
-  beats h3-js on 26 of 52, and sits ≈1.31× (median) off the row winner. On
-  the heavy geometry / grid / compact / multi-polygon functions it is
-  ~1.1–4.5× faster than h3-js; on trivial string-input accessors
-  (`getResolution`, `isValidCell`, `getBaseCellNumber`, …) h3-js is faster.
+- **h3-wasm** is fastest outright on 20 of 52 (tied once, on `degsToRads`;
+  e.g. `gridDisk`, `cellToChildren`, `getRes0Cells`, `cellsToMultiPolygon`,
+  `splitLongToH3Index`), beats h3-js on 31 of 52, and sits ≈1.08× (median)
+  off the row winner. On the heavy geometry / grid / compact /
+  multi-polygon functions it is ~1.6–6.3× faster than h3-js; on trivial
+  string-input accessors (`getResolution`, `isValidCell`,
+  `getBaseCellNumber`, …) h3-js is faster.
 - **h3-js** (the same C compiled to asm.js via emscripten) wins the trivial
   accessors where there is little to compute. Its trig-heavy rows are within
   ~1.25× of h3-wasm's: both route the C transcendentals to the host `Math.*`
@@ -238,58 +249,58 @@ browsers, Deno, and Bun with no native build or per-platform prebuilds.
 
 | Function | h3-wasm | h3-js | h3-node |
 | --- | ---: | ---: | ---: |
-| latLngToCell | 649 ns | 785 ns | **275 ns** |
-| cellToLatLng | 333 ns | **312 ns** | 440 ns |
-| cellToBoundary | **744 ns** | 912 ns | 1829 ns |
-| cellToBoundaryGeoJson | **739 ns** | 955 ns | 1965 ns |
-| getResolution | 184 ns | 108 ns | **95.6 ns** |
-| getBaseCellNumber | 141 ns | **84.3 ns** | 92.1 ns |
-| isValidCell | 114 ns | 79.0 ns | **52.7 ns** |
-| isResClassIII | 142 ns | **91.1 ns** | 93.2 ns |
-| isPentagon | 143 ns | **91.8 ns** | 92.7 ns |
-| getIcosahedronFaces | **287 ns** | 331 ns | 313 ns |
-| gridDisk | 23.9 µs | 63.3 µs | **17.8 µs** |
-| gridDiskDistances | 7086 ns | 11.8 µs | **7015 ns** |
-| gridRingUnsafe | 2316 ns | 2239 ns | **1719 ns** |
-| gridDistance | 371 ns | 333 ns | **240 ns** |
-| cellToLocalIj | **347 ns** | 400 ns | 478 ns |
-| localIjToCell | 536 ns | 636 ns | **372 ns** |
-| gridPathCells | 2280 ns | 1804 ns | **1298 ns** |
-| cellToParent | 304 ns | 235 ns | **142 ns** |
-| cellToChildren | 14.2 µs | 12.4 µs | **11.2 µs** |
-| cellToChildrenSize | 184 ns | 223 ns | **103 ns** |
-| cellToCenterChild | 268 ns | 185 ns | **139 ns** |
-| compactCells | 19.8 µs | 59.9 µs | **17.3 µs** |
-| uncompactCells | 16.0 µs | 18.2 µs | **15.5 µs** |
-| polygonToCells | 24.2 µs | 52.6 µs | **22.3 µs** |
-| polygonToCellsWithHoles | 32.4 µs | 62.0 µs | **30.6 µs** |
-| polygonToCellsExperimental | 130.82 µs | 178.90 µs | **122.86 µs** |
-| cellsToMultiPolygon | **32.2 µs** | 142.12 µs | 34.8 µs |
-| cellsToMultiPolygonGeoJson | **31.7 µs** | 142.37 µs | 34.6 µs |
-| areNeighborCells | 327 ns | 323 ns | **189 ns** |
-| cellsToDirectedEdge | 420 ns | 391 ns | **218 ns** |
-| getDirectedEdgeOrigin | 268 ns | 182 ns | **132 ns** |
-| getDirectedEdgeDestination | 279 ns | 231 ns | **142 ns** |
-| directedEdgeToCells | 396 ns | **317 ns** | 364 ns |
-| originToDirectedEdges | 813 ns | **619 ns** | 661 ns |
-| directedEdgeToBoundary | **492 ns** | 620 ns | 845 ns |
-| reverseDirectedEdge | 312 ns | 329 ns | **173 ns** |
-| degsToRads | 9.1 ns | **8.1 ns** | 25.9 ns |
-| radsToDegs | **10.7 ns** | 11.7 ns | 28.3 ns |
-| getNumCells | 58.5 ns | 42.5 ns | **28.1 ns** |
-| getHexagonEdgeLengthAvg | 61.9 ns | **32.8 ns** | 44.4 ns |
-| edgeLength | 502 ns | 648 ns | **471 ns** |
-| getHexagonAreaAvg | 62.4 ns | **32.6 ns** | 41.1 ns |
-| cellArea | 880 ns | 1106 ns | **801 ns** |
-| greatCircleDistance | **74.0 ns** | 211 ns | 209 ns |
-| getRes0Cells | 18.6 µs | 10.3 µs | **9963 ns** |
-| getPentagons | 1107 ns | **1083 ns** | 1247 ns |
-| cellToVertex | 420 ns | 477 ns | **303 ns** |
-| cellToVertexes | 1945 ns | 2499 ns | **1856 ns** |
-| vertexToLatLng | **327 ns** | 427 ns | 472 ns |
-| h3IndexToSplitLong | 123 ns | **75.1 ns** | 79.3 ns |
-| splitLongToH3Index | **107 ns** | 258 ns | 256 ns |
-| constructCell | 178 ns | **163 ns** | 354 ns |
+| latLngToCell | 709 ns | 872 ns | **374 ns** |
+| cellToLatLng | 412 ns | **326 ns** | 422 ns |
+| cellToBoundary | **761 ns** | 914 ns | 1806 ns |
+| cellToBoundaryGeoJson | **726 ns** | 944 ns | 1997 ns |
+| getResolution | 163 ns | 110 ns | **92.5 ns** |
+| getBaseCellNumber | 141 ns | **87.2 ns** | 92.8 ns |
+| isValidCell | 113 ns | 88.5 ns | **54.9 ns** |
+| isResClassIII | 145 ns | **83.9 ns** | 85.6 ns |
+| isPentagon | 140 ns | 94.6 ns | **92.0 ns** |
+| getIcosahedronFaces | **293 ns** | 343 ns | 323 ns |
+| gridDisk | **10.3 µs** | 62.4 µs | 17.7 µs |
+| gridDiskDistances | 7051 ns | 11.6 µs | **6909 ns** |
+| gridRingUnsafe | **881 ns** | 2135 ns | 1677 ns |
+| gridDistance | 367 ns | 379 ns | **243 ns** |
+| cellToLocalIj | **340 ns** | 416 ns | 481 ns |
+| localIjToCell | 523 ns | 609 ns | **370 ns** |
+| gridPathCells | 2160 ns | 1802 ns | **1402 ns** |
+| cellToParent | 298 ns | 196 ns | **144 ns** |
+| cellToChildren | **3488 ns** | 12.1 µs | 10.9 µs |
+| cellToChildrenSize | 181 ns | 231 ns | **96.8 ns** |
+| cellToCenterChild | 270 ns | 177 ns | **141 ns** |
+| compactCells | **16.5 µs** | 62.0 µs | 17.9 µs |
+| uncompactCells | **6230 ns** | 18.6 µs | 16.1 µs |
+| polygonToCells | 24.0 µs | 52.4 µs | **22.7 µs** |
+| polygonToCellsWithHoles | 32.6 µs | 61.4 µs | **30.7 µs** |
+| polygonToCellsExperimental | 130.53 µs | 180.85 µs | **122.23 µs** |
+| cellsToMultiPolygon | **32.2 µs** | 141.05 µs | 35.4 µs |
+| cellsToMultiPolygonGeoJson | **32.2 µs** | 141.43 µs | 34.9 µs |
+| areNeighborCells | 324 ns | 322 ns | **191 ns** |
+| cellsToDirectedEdge | 439 ns | 398 ns | **229 ns** |
+| getDirectedEdgeOrigin | 268 ns | 179 ns | **135 ns** |
+| getDirectedEdgeDestination | 284 ns | 208 ns | **144 ns** |
+| directedEdgeToCells | 388 ns | **299 ns** | 354 ns |
+| originToDirectedEdges | **392 ns** | 626 ns | 671 ns |
+| directedEdgeToBoundary | **503 ns** | 665 ns | 854 ns |
+| reverseDirectedEdge | 319 ns | 289 ns | **181 ns** |
+| degsToRads | **9.1 ns** | **9.1 ns** | 25.8 ns |
+| radsToDegs | **10.9 ns** | 11.3 ns | 33.3 ns |
+| getNumCells | 67.8 ns | 43.0 ns | **28.1 ns** |
+| getHexagonEdgeLengthAvg | 62.6 ns | **33.1 ns** | 42.1 ns |
+| edgeLength | 515 ns | 689 ns | **458 ns** |
+| getHexagonAreaAvg | 63.1 ns | **32.5 ns** | 40.8 ns |
+| cellArea | 907 ns | 1121 ns | **838 ns** |
+| greatCircleDistance | **75.0 ns** | 210 ns | 206 ns |
+| getRes0Cells | **3153 ns** | 10.3 µs | 9758 ns |
+| getPentagons | **565 ns** | 1081 ns | 1227 ns |
+| cellToVertex | 440 ns | 500 ns | **302 ns** |
+| cellToVertexes | **1531 ns** | 2465 ns | 1844 ns |
+| vertexToLatLng | **334 ns** | 410 ns | 433 ns |
+| h3IndexToSplitLong | 115 ns | **76.6 ns** | 76.9 ns |
+| splitLongToH3Index | **107 ns** | 255 ns | 255 ns |
+| constructCell | 181 ns | **167 ns** | 385 ns |
 
 ## Repository layout
 

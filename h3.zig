@@ -696,3 +696,58 @@ export fn bind__h3IndexFromString(ptr: i32, len: i32, out: i32) void {
     outPtr[0] = @truncate(val);
     outPtr[1] = @truncate(val >> 32);
 }
+
+/// Stringify an array of 64-bit H3 indexes so the JS layer can read the
+/// results with a single TextDecoder.decode instead of building each hex
+/// string in JS (~150 ns/cell of toString(16)/padStart work).
+///
+/// `src` points at `count` little-endian u64 indexes (the layout the C
+/// library writes for cell/vertex/edge output). `out` points at count * 17
+/// bytes; each non-empty index occupies a 17-byte slot, written in order:
+///   [0]     = string length in bytes (9..16)
+///   [1..16] = the hex string, exactly as JS's splitLongToH3Index formats
+///             it: the upper 32 bits as minimal lowercase hex (1..8 chars —
+///             a u32 never needs more than 8) plus the lower 32 bits
+///             zero-padded to 8. 16 is the hard maximum, so the slot always
+///             fits and the JS layer needs no fallback.
+/// Indexes with upper == 0 (the C library's "empty slot" sentinel, which
+/// the JS layer skips) occupy no slot. Bytes past the string in a slot are
+/// left untouched; the JS layer slices exactly [1, 1 + length).
+///
+/// Returns the number of slots written. Allocates nothing (no C call, no
+/// Zig heap), so the wasm memory cannot grow and the JS views stay valid.
+export fn bind__h3IndexArrayToStrings(src: i32, count: i32, out: i32) u32 {
+    if (count <= 0) return 0;
+    const n: usize = @intCast(count);
+    const cells = @as([*]const u64, @ptrFromInt(@as(usize, @intCast(src))))[0..n];
+    const dst = @as([*]u8, @ptrFromInt(@as(usize, @intCast(out))))[0..n * 17];
+    const HEX = "0123456789abcdef";
+    var written: u32 = 0;
+    for (cells) |cell| {
+        const upper: u32 = @truncate(cell >> 32);
+        if (upper == 0) continue;
+        const lower: u32 = @truncate(cell);
+        const slot = dst[@as(usize, written) * 17 .. @as(usize, written) * 17 + 17];
+        // Nibbles come out least-significant first; right-align them in up
+        // (up[8 - nup .. 8]) so the copy below reads them most-significant
+        // first.
+        var up: [8]u8 = undefined;
+        var nup: usize = 0;
+        var x = upper;
+        while (x != 0) : (x >>= 4) {
+            up[7 - nup] = HEX[x & 0x0f];
+            nup += 1;
+        }
+        slot[0] = @intCast(nup + 8);
+        for (0..nup) |j| {
+            slot[1 + j] = up[8 - nup + j];
+        }
+        x = lower;
+        for (0..8) |j| {
+            slot[1 + nup + (7 - j)] = HEX[x & 0x0f];
+            x >>= 4;
+        }
+        written += 1;
+    }
+    return written;
+}

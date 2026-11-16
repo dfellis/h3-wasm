@@ -362,10 +362,41 @@ function readH3IndexFromPtr(cAddress) {
     return upper ? splitLongToH3Index(lower, upper) : null;
 }
 
+// Decodes the ASCII hex strings bind__h3IndexArrayToStrings writes for
+// readIndexArray. Module-scope: one allocation, reused for every call.
+const indexStringDecoder = new TextDecoder();
+
+// Below this many cells, the fixed cost of the wasm call + TextDecoder
+// (~50-60 ns) cancels the per-cell savings, so small outputs keep the
+// legacy JS path.
+const INDEX_STRINGIFY_MIN = 3;
+
 /**
  * Read an array of 64-bit H3 indexes, skipping 0s.
+ *
+ * For arrays of INDEX_STRINGIFY_MIN or more, the hex strings are built in
+ * wasm (bind__h3IndexArrayToStrings: one 17-byte slot per cell — a length
+ * byte plus up to 16 hex chars), then read back with one decode and one
+ * slice per cell, replacing ~150 ns of JS hex construction per cell with
+ * a few ns (measured: 122 cells go from ~18.6 µs to ~0.6 µs).
  */
 function readIndexArray(cAddress, maxCount) {
+    if (
+        maxCount >= INDEX_STRINGIFY_MIN &&
+        nextFree + 16 + maxCount * 17 <= INITIAL_TOP
+    ) {
+        const strPtr = alloc(maxCount * 17);
+        // The stringifier allocates nothing (no C call, no Zig heap), so
+        // the buffer cannot detach and the views stay valid across it.
+        const written = H3.bind__h3IndexArrayToStrings(cAddress, maxCount, strPtr);
+        const s = indexStringDecoder.decode(u8.subarray(strPtr, strPtr + 17 * written));
+        const out = new Array(written);
+        for (let i = 0; i < written; i++) {
+            const b = 17 * i;
+            out[i] = s.slice(b + 1, b + 1 + u8[strPtr + b]);
+        }
+        return out;
+    }
     const out = [];
     for (let i = 0; i < maxCount; i++) {
         const h3Index = readH3IndexFromPtr(cAddress + 8 * i);
