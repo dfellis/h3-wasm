@@ -1,0 +1,122 @@
+name: Unit Testing
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # The wasm artifact is host-independent (wasm32-freestanding, -mcpu
+  # baseline), so it is built once here instead of in every matrix cell
+  # (unlike h3-node's native bindings). The matrix below then validates
+  # the JS layer and the h3-node prebuilds on each platform.
+  build:
+    name: build h3.wasm (zig 0.16.0 / ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+
+      - name: Set up Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Fetch H3 v4.5.0
+        # h3/ is gitignored (the build consumes the C library in place).
+        # Fetch the exact tag, then generate h3api.h from h3api.h.in —
+        # what CMake's configure_file does in a regular H3 build.
+        run: |
+          curl -fsSL https://github.com/uber/h3/archive/refs/tags/v4.5.0.tar.gz -o /tmp/h3.tgz
+          mkdir -p h3
+          tar -xzf /tmp/h3.tgz -C h3 --strip-components=1
+          sed -e 's/@H3_VERSION_MAJOR@/4/' -e 's/@H3_VERSION_MINOR@/5/' -e 's/@H3_VERSION_PATCH@/0/' \
+            h3/src/h3lib/include/h3api.h.in > h3/src/h3lib/include/h3api.h
+
+      - name: Build
+        run: make
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: h3-wasm-build
+          path: |
+            h3.wasm
+            build/metadata.js
+
+  test:
+    name: node ${{ matrix.node-version }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest, macos-latest ]
+        node-version: [ '22.x', '24.x', '26.x' ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7.1.0
+        with:
+          node-version: ${{ matrix.node-version }}
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: h3-wasm-build
+          path: .
+
+      # pnpm version comes from the packageManager field in package.json
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      # h3-node (a dev dependency) runs its install script, which is a
+      # no-op on every matrix platform because the npm package ships a
+      # prebuild for it (allowBuilds in pnpm-workspace.yaml keeps the
+      # script allowed, as pnpm >= 11 blocks them by default)
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run unit tests
+        run: pnpm test
+
+  # The Linux prebuilds of h3-node ship in both libc flavors; make sure the
+  # suite (and h3-node's musl prebuild) also pass on musl.
+  test-musl:
+    name: node 24 / linux musl (Alpine)
+    runs-on: ubuntu-latest
+    needs: build
+    container:
+      image: node:24-alpine
+      options: --user root
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      # The node:alpine image ships only node and npm; h3-node's install
+      # script requires bash
+      - name: Install build tools
+        run: apk add --no-cache bash
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: h3-wasm-build
+          path: .
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Run unit tests
+        run: pnpm test

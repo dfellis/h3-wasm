@@ -1,13 +1,29 @@
 {
   "name": "h3-wasm",
   "version": "0.0.1-alpha",
-  "description": "WASM-compiled H3 for Node and Browser using Zig",
+  "description": "WASM-compiled H3 v4.5.0 for Node and Browser, built from the C library with Zig",
   "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "files": [
+    "index.js",
+    "h3.wasm",
+    "build/metadata.js"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
   "directories": {
     "test": "test"
   },
   "scripts": {
-    "test": "nodeunit test"
+    "build": "make",
+    "test": "node --test \"test/*.test.js\"",
+    "release": "node tools/release.mjs",
+    "prepublishOnly": "node tools/check-artifacts.mjs"
   },
   "repository": {
     "type": "git",
@@ -16,8 +32,10 @@
   "keywords": [
     "h3",
     "wasm",
-    "node",
-    "browser"
+    "zig",
+    "hexagon",
+    "spatial-indexing",
+    "geolocation"
   ],
   "author": "David Ellis <isv.damocles@gmail.com>",
   "license": "MIT",
@@ -25,8 +43,11 @@
     "url": "https://github.com/dfellis/h3-wasm/issues"
   },
   "homepage": "https://github.com/dfellis/h3-wasm#readme",
+  "publishConfig": {
+    "access": "public"
+  },
   "devDependencies": {
-    "h3-js": "^4.1.0",
-    "nodeunit": "^0.11.3"
+    "h3-js": "^4.5.0",
+    "h3-node": "^4.5.6"
   }
 }
