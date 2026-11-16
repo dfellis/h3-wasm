@@ -1,6 +1,6 @@
 {
   "name": "h3-wasm",
-  "version": "0.0.1-alpha",
+  "version": "4.5.0",
   "description": "WASM-compiled H3 v4.5.0 for Node and Browser, built from the C library with Zig",
   "main": "index.js",
   "exports": {
