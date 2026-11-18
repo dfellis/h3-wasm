@@ -21,16 +21,18 @@ cd "$(dirname "$0")/.."
 PATCH=patches/h3-v4.5.0-optimizations.patch
 COORDIJK=h3/src/h3lib/include/coordijk.h
 FACEIJK=h3/src/h3lib/lib/faceijk.c
+AREAC=h3/src/h3lib/lib/area.c
 
-if [ ! -f "$COORDIJK" ] || [ ! -f "$FACEIJK" ]; then
-    echo "error: $COORDIJK / $FACEIJK not found." >&2
+if [ ! -f "$COORDIJK" ] || [ ! -f "$FACEIJK" ] || [ ! -f "$AREAC" ]; then
+    echo "error: $COORDIJK / $FACEIJK / $AREAC not found." >&2
     echo "       Extract H3 v4.5.0 into ./h3/ first (see README)." >&2
     exit 1
 fi
 
 # Fast path: already fully applied? Marker strings introduced by the patch,
 # one per file it touches.
-if grep -q '_roundDiv7' "$COORDIJK" && grep -q 'faceTangentNorth' "$FACEIJK"; then
+if grep -q '_roundDiv7' "$COORDIJK" && grep -q 'faceTangentNorth' "$FACEIJK" &&
+    grep -q 'cur_sin' "$AREAC"; then
     exit 0
 fi
 
@@ -48,7 +50,8 @@ if [ "$rc" -gt 1 ]; then
 fi
 
 # Convergence check: every marker must be present after the apply.
-if ! grep -q '_roundDiv7' "$COORDIJK" || ! grep -q 'faceTangentNorth' "$FACEIJK"; then
+if ! grep -q '_roundDiv7' "$COORDIJK" || ! grep -q 'faceTangentNorth' "$FACEIJK" ||
+    ! grep -q 'cur_sin' "$AREAC"; then
     echo "error: $PATCH did not fully apply to ./h3/ (partial state)." >&2
     echo "       Remove ./h3/ and extract H3 v4.5.0 again (see README)," >&2
     echo "       then re-run make." >&2
@@ -56,4 +59,5 @@ if ! grep -q '_roundDiv7' "$COORDIJK" || ! grep -q 'faceTangentNorth' "$FACEIJK"
 fi
 
 # Clean up rejects/origs from skipped hunks (partial-state re-apply).
-rm -f "$COORDIJK.rej" "$FACEIJK.rej" "$COORDIJK.orig" "$FACEIJK.orig"
+rm -f "$COORDIJK.rej" "$FACEIJK.rej" "$AREAC.rej" \
+      "$COORDIJK.orig" "$FACEIJK.orig" "$AREAC.orig"
