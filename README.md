@@ -40,6 +40,11 @@ Produces:
 - `build/metadata.js` — memory/table/data-segment facts generated from the
   linked wasm; imported by `index.js` at startup.
 
+Before compiling, `make` applies the committed performance patch
+(`patches/h3-v4.5.0-optimizations.patch`) to `./h3/` (idempotent — it is
+re-applied automatically after `./h3/` is re-extracted or reset, which CI
+does on every run).
+
 The build is intentionally a plain `zig build-lib` invocation (see the
 Makefile comments for why `zig build` is not used). No libc, no build.zig:
 varargs support is `cvar.c`, the trivial libm functions are `mathcompat.c`,
@@ -76,9 +81,11 @@ against **both** `h3-js` and `h3-node` on every function:
 `.github/workflows/test.yml` mimics h3-node's test workflow:
 
 - A `build` job fetches the H3 v4.5.0 tag, generates `h3api.h` (what
-  CMake's `configure_file` does in a regular H3 build), builds `h3.wasm`
-  once with Zig 0.16.0, and uploads it — the artifact is host-independent,
-  so it is not rebuilt per OS (unlike h3-node's native prebuilds).
+  CMake's `configure_file` does in a regular H3 build), and builds
+  `h3.wasm` once with Zig 0.16.0 — the Makefile first applies the
+  committed performance patch (`patches/`) to the fetched source — then
+  uploads it. The artifact is host-independent, so it is not rebuilt per OS
+  (unlike h3-node's native prebuilds).
 - The `test` matrix runs the suite on ubuntu/windows/macos × node
   22/24/26, loading h3-node's platform prebuilds as the reference.
 - `test-musl` runs the same suite in a `node:24-alpine` container to
@@ -228,24 +235,26 @@ Turbofan) are from **Node 24 on x86-64 Linux**; the relative pattern holds
 on other platforms. Fastest per row is bolded. Expect a few percent
 run-to-run variance (occasionally ~30% on a single row).
 
-- **h3-node** (a compiled N-API binding) is fastest on 30 of 52 functions
-  and is the performance bar. Since 4.5.6 it stringifies index arrays in C
-  (17-byte hex slots in an `ArrayBuffer`), which widened its lead on the
-  string-output rows (`gridDisk`, `cellToChildren`, `getRes0Cells`, …).
-- **h3-wasm** is fastest outright on 16 of 52 (tied twice, within
-  run-to-run noise: `degsToRads` with h3-js, `cellToVertexes` with
-  h3-node; e.g. `cellToBoundary`, `uncompactCells`, `cellsToMultiPolygon`,
-  `originToDirectedEdges`, `splitLongToH3Index`), beats h3-js on 35 of 52,
-  and sits ≈1.24× (median) off the row winner. On the heavy geometry /
-  grid / compact / multi-polygon functions it is ~1.4–6.2× faster than
-  h3-js; on trivial string-input accessors (`getResolution`, `isValidCell`,
-  `getBaseCellNumber`, …) h3-js is faster.
-- **h3-js** (the same C compiled to asm.js via emscripten) wins a handful of
-  trivial accessors where there is little to compute (e.g.
-  `getBaseCellNumber`, `isResClassIII`, `h3IndexToSplitLong`). Its trig-heavy
-  rows are within ~1.3× of h3-wasm's: both route the C transcendentals to the
-  host `Math.*` builtins (h3-wasm via a wasm import, h3-js via emscripten's
-  JS shim — see [Architecture](#architecture)).
+- **h3-node** (a compiled N-API binding) is fastest on 24 of 52 functions
+  and remains the performance bar on the trivial accessor and string-output
+  rows (`getRes0Cells`, `gridDiskDistances`, `getBaseCellNumber`, …). Since
+  4.5.6 it stringifies index arrays in C (17-byte hex slots in an
+  `ArrayBuffer`).
+- **h3-wasm** (the v4.5.0 C source plus the committed performance patch in
+  `patches/`, applied at build time) is fastest outright on 23 of 52
+  (e.g. `cellToBoundary`, `cellToLatLng`, `compactCells`,
+  `uncompactCells`, `cellsToMultiPolygon`, `originToDirectedEdges`,
+  `splitLongToH3Index`), beats h3-js on 41 of 52, and sits ≈1.00× (median)
+  off the row winner. On the heavy geometry / grid / compact /
+  multi-polygon functions it is 1.3–5.4× faster than h3-js, beats h3-node
+  on `compactCells`, `uncompactCells`, and `cellsToMultiPolygon`, and is
+  within ~10% of it on `gridDisk`, `polygonToCells`, and `cellArea`.
+- **h3-js** (the same C compiled to asm.js via emscripten) wins 5 of 52,
+  mostly pure-conversion rows with little to compute (`getNumCells`,
+  `getHexagonAreaAvg`, `constructCell`, …). Its trig-heavy rows are within
+  ~2× of h3-wasm's: both route the C transcendentals to the host `Math.*`
+  builtins (h3-wasm via a wasm import, h3-js via emscripten's JS shim — see
+  [Architecture](#architecture)).
 
 The cost of h3-wasm's per-call overhead (wasm invocation + argument
 marshalling) is the payoff: one host-independent `h3.wasm` runs in Node,
@@ -253,59 +262,58 @@ browsers, Deno, and Bun with no native build or per-platform prebuilds.
 
 | Function | h3-wasm | h3-js | h3-node |
 | --- | ---: | ---: | ---: |
-| latLngToCell | 678.2 ns | 826.7 ns | **320.8 ns** |
-| cellToLatLng | **334.7 ns** | 351.2 ns | 405.9 ns |
-| cellToBoundary | **774.5 ns** | 938.7 ns | 1761 ns |
-| cellToBoundaryGeoJson | **726.4 ns** | 986.8 ns | 1899 ns |
-| getResolution | 156.8 ns | 114.5 ns | **90.1 ns** |
-| getBaseCellNumber | 135.8 ns | 88.5 ns | **88.1 ns** |
-| isValidCell | 109 ns | 79.5 ns | **54.3 ns** |
-| isResClassIII | 140.7 ns | 91.6 ns | **81.2 ns** |
-| isPentagon | 136.4 ns | 94.3 ns | **88.6 ns** |
-| getIcosahedronFaces | **286.5 ns** | 329.2 ns | 316 ns |
-| gridDisk | 9847 ns | 61.0 µs | **8466 ns** |
-| gridDiskDistances | 6853 ns | 11.4 µs | **2808 ns** |
-| gridRingUnsafe | **840.5 ns** | 2195 ns | 917.1 ns |
-| gridDistance | 370.9 ns | 385.9 ns | **232.6 ns** |
-| cellToLocalIj | **351.3 ns** | 419.7 ns | 491 ns |
-| localIjToCell | 533.1 ns | 649 ns | **371.9 ns** |
-| gridPathCells | 2167 ns | 1858 ns | **1275 ns** |
-| cellToParent | 298.3 ns | 225.7 ns | **139.7 ns** |
-| cellToChildren | 3557 ns | 12.2 µs | **2550 ns** |
-| cellToChildrenSize | 176.6 ns | 221.9 ns | **95.3 ns** |
-| cellToCenterChild | 269.2 ns | 189.8 ns | **140.8 ns** |
-| compactCells | 16.5 µs | 61.9 µs | **15.1 µs** |
-| uncompactCells | **6925 ns** | 18.9 µs | 7507 ns |
-| polygonToCells | 24.2 µs | 52.7 µs | **21.5 µs** |
-| polygonToCellsWithHoles | 32.6 µs | 62.0 µs | **29.5 µs** |
-| polygonToCellsExperimental | 130.99 µs | 180.93 µs | **120.56 µs** |
-| cellsToMultiPolygon | **32.4 µs** | 142.55 µs | 34.6 µs |
-| cellsToMultiPolygonGeoJson | **31.9 µs** | 143.07 µs | 34.9 µs |
-| areNeighborCells | 330.4 ns | 376.4 ns | **183.8 ns** |
-| cellsToDirectedEdge | 428 ns | 460.7 ns | **240.5 ns** |
-| getDirectedEdgeOrigin | 275.4 ns | 181.7 ns | **133 ns** |
-| getDirectedEdgeDestination | 285.3 ns | 228.7 ns | **157.2 ns** |
-| directedEdgeToCells | 400 ns | **322.7 ns** | 349.3 ns |
-| originToDirectedEdges | **404.7 ns** | 630.4 ns | 458.6 ns |
-| directedEdgeToBoundary | **508.8 ns** | 688.9 ns | 847.4 ns |
-| reverseDirectedEdge | 318.2 ns | 336.4 ns | **186 ns** |
-| degsToRads | **9.4 ns** | **9.4 ns** | 26 ns |
-| radsToDegs | **10.7 ns** | 11.5 ns | 28.4 ns |
-| getNumCells | 59.9 ns | 43.7 ns | **29.4 ns** |
-| getHexagonEdgeLengthAvg | 62.1 ns | **32.6 ns** | 43.2 ns |
-| edgeLength | 506.9 ns | 662.8 ns | **447.4 ns** |
-| getHexagonAreaAvg | 61.9 ns | **32.1 ns** | 43.5 ns |
-| cellArea | 875.5 ns | 1128 ns | **797.7 ns** |
-| greatCircleDistance | **73.9 ns** | 198.1 ns | 210.4 ns |
-| getRes0Cells | 3115 ns | 10.3 µs | **2034 ns** |
-| getPentagons | **561.4 ns** | 1086 ns | 598 ns |
-| cellToVertex | 423.5 ns | 527.5 ns | **284.5 ns** |
-| cellToVertexes | **1538 ns** | 2541 ns | **1541 ns** |
-| vertexToLatLng | **331.4 ns** | 403 ns | 429 ns |
-| h3IndexToSplitLong | 115.5 ns | 83.8 ns | **77.8 ns** |
-| splitLongToH3Index | **107.5 ns** | 253.6 ns | 252.1 ns |
-| constructCell | 184.8 ns | **159.1 ns** | 347.2 ns |
-
+| latLngToCell | 451.6 ns | 684.4 ns | **305.9 ns** |
+| cellToLatLng | **292.8 ns** | 332 ns | 398.7 ns |
+| cellToBoundary | **644.9 ns** | 829.9 ns | 1711 ns |
+| cellToBoundaryGeoJson | **671.9 ns** | 856.4 ns | 1883 ns |
+| getResolution | 90.5 ns | 99 ns | **85.6 ns** |
+| getBaseCellNumber | 78.2 ns | **73.5 ns** | 83.2 ns |
+| isValidCell | 73.3 ns | 80.8 ns | **50.4 ns** |
+| isResClassIII | **78 ns** | 79.5 ns | 82.2 ns |
+| isPentagon | 102.5 ns | 92 ns | **84.9 ns** |
+| getIcosahedronFaces | **213.6 ns** | 301.8 ns | 307.5 ns |
+| gridDisk | 9161 ns | 49.2 µs | **6971 ns** |
+| gridDiskDistances | 7024 ns | 10.4 µs | **3859 ns** |
+| gridRingUnsafe | **791.8 ns** | 2140 ns | 926 ns |
+| gridDistance | 250 ns | 355.3 ns | **229.8 ns** |
+| cellToLocalIj | **220.7 ns** | 364.9 ns | 472.1 ns |
+| localIjToCell | **315.5 ns** | 589.8 ns | 372.4 ns |
+| gridPathCells | 1461 ns | 1861 ns | **1302 ns** |
+| cellToParent | 245.4 ns | 186.7 ns | **134.6 ns** |
+| cellToChildren | 3108 ns | 14.3 µs | **2811 ns** |
+| cellToChildrenSize | 126.3 ns | 211.1 ns | **94.6 ns** |
+| cellToCenterChild | 213.1 ns | 170.5 ns | **136.3 ns** |
+| compactCells | **10.6 µs** | 57.3 µs | 14.8 µs |
+| uncompactCells | **6118 ns** | 18.3 µs | 7614 ns |
+| polygonToCells | 21.7 µs | 52.4 µs | **21.6 µs** |
+| polygonToCellsWithHoles | 29.1 µs | 61.6 µs | **29.1 µs** |
+| polygonToCellsExperimental | 123.27 µs | 177.67 µs | **120.99 µs** |
+| cellsToMultiPolygon | **29.4 µs** | 140.77 µs | 35.2 µs |
+| cellsToMultiPolygonGeoJson | **30.1 µs** | 139.55 µs | 34.5 µs |
+| areNeighborCells | 222.8 ns | 289 ns | **179.1 ns** |
+| cellsToDirectedEdge | 303.9 ns | 382.6 ns | **231.7 ns** |
+| getDirectedEdgeOrigin | 218.2 ns | 167.5 ns | **127.3 ns** |
+| getDirectedEdgeDestination | 214.1 ns | 206.3 ns | **144.6 ns** |
+| directedEdgeToCells | 340.5 ns | **305 ns** | 355.9 ns |
+| originToDirectedEdges | **323.1 ns** | 606.1 ns | 546.3 ns |
+| directedEdgeToBoundary | **423.9 ns** | 618.3 ns | 878.7 ns |
+| reverseDirectedEdge | 261.1 ns | 299 ns | **171.4 ns** |
+| degsToRads | **8.8 ns** | 9.1 ns | 28.1 ns |
+| radsToDegs | **10.7 ns** | 11.4 ns | 28.2 ns |
+| getNumCells | 59.2 ns | 43.1 ns | **29.7 ns** |
+| getHexagonEdgeLengthAvg | 62.9 ns | **32 ns** | 42.1 ns |
+| edgeLength | **425.3 ns** | 647.4 ns | 470.8 ns |
+| getHexagonAreaAvg | 61.9 ns | **31.9 ns** | 40.7 ns |
+| cellArea | 802.9 ns | 1083 ns | **797.3 ns** |
+| greatCircleDistance | **73.1 ns** | 198.7 ns | 207.5 ns |
+| getRes0Cells | 3058 ns | 10.4 µs | **1783 ns** |
+| getPentagons | **556.9 ns** | 1120 ns | 688 ns |
+| cellToVertex | 372.8 ns | 508.3 ns | **302.7 ns** |
+| cellToVertexes | **1413 ns** | 2573 ns | 1613 ns |
+| vertexToLatLng | **274.7 ns** | 378 ns | 434.8 ns |
+| h3IndexToSplitLong | **58.3 ns** | 68.1 ns | 71.3 ns |
+| splitLongToH3Index | **111.5 ns** | 256.9 ns | 255.5 ns |
+| constructCell | 179.1 ns | **164.8 ns** | 354.5 ns |
 ## Repository layout
 
 ```
@@ -316,7 +324,8 @@ mathcompat.c    trivial libm (round/lround/fmin/fmax); transcendentals import ho
 cvar.c          C varargs support
 cshim/          hand-written C headers (math.h, …) for the freestanding build
 Makefile        2-stage build (support.a → h3.wasm) + metadata generation
-tools/          build helpers (metadata generator) + publish guard + release script
+patches/        performance patch applied to the v4.5.0 H3 source at build time
+tools/          build helpers (patch applier, metadata generator) + publish guard + release script
 test/           node:test suite (3-way comparison vs h3-js and h3-node)
 h3/             H3 v4.5.0 C library (gitignored; clone it yourself)
 h3-js/ h3-node/ reference checkouts (gitignored; not required to build)

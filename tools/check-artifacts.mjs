@@ -29,6 +29,10 @@ const DEP_GRAPH = {
         'mathcompat.c',
         'cvar.c',
         'Makefile',
+        // The H3 performance patch is applied to ./h3/ at build time;
+        // changing the patch (or the applier) must invalidate h3.wasm.
+        'patches/h3-v4.5.0-optimizations.patch',
+        'tools/apply-h3-patches.sh',
         ...listDir('cshim'),
         ...listDir('h3/src/h3lib/lib', '.c'),
     ],

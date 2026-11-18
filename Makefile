@@ -20,6 +20,12 @@
 #
 # build/metadata.js is generated from the linked wasm (data segment extent +
 # import constraints) and is imported by index.js at runtime.
+#
+# The H3 performance optimizations are not part of upstream v4.5.0: they live
+# in patches/ and are applied to the gitignored ./h3/ working copy by
+# tools/apply-h3-patches.sh (idempotent) at the start of every h3.wasm build,
+# because ./h3/ is ephemeral — CI re-extracts the pristine v4.5.0 tarball on
+# each run and a local checkout can be re-cloned or `git checkout`-reset.
 
 ZIG ?= zig
 NODE ?= node
@@ -40,11 +46,13 @@ build:
 build/support.a: support.zig Makefile | build
 	$(ZIG) build-lib support.zig $(ZIGFLAGS) -static -femit-bin=build/support.a --name support
 
-h3.wasm: build/support.a h3.zig $(H3_C_SRCS) mathcompat.c cvar.c $(wildcard cshim/*) Makefile
+h3.wasm: build/support.a h3.zig $(H3_C_SRCS) mathcompat.c cvar.c $(wildcard cshim/*) Makefile \
+	patches/h3-v4.5.0-optimizations.patch tools/apply-h3-patches.sh
 	# NOTE: Zig 0.16 CLI quirk: per-module options (-target/-mcpu/-O/...)
 	# must come BEFORE -Mroot=; options after -Mroot= are silently dropped
 	# and the build defaults to the native target (symptom: "not an ELF
 	# file" when the wasm archive is fed to the ELF linker).
+	./tools/apply-h3-patches.sh
 	-@rm -f h3.wasm
 	$(ZIG) build-lib $(ZIGFLAGS) -dynamic build/support.a mathcompat.c cvar.c $(H3_C_SRCS) \
 		-Mroot=h3.zig \
